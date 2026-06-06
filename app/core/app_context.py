@@ -4,6 +4,9 @@ from dataclasses import dataclass
 
 from app.common.signals import EventBus
 from app.core.session_manager import SessionManager
+from app.storage.db import Database
+from app.storage.repositories import ConnectionRepository, SessionRepository
+from app.storage.secrets import SecretStore
 
 
 @dataclass
@@ -11,11 +14,20 @@ class AppContext:
     """应用服务容器."""
 
     event_bus: EventBus
+    database: Database
     session_manager: SessionManager
 
     @classmethod
     def create_default(cls) -> "AppContext":
         event_bus = EventBus()
-        session_manager = SessionManager(event_bus)
-        return cls(event_bus=event_bus, session_manager=session_manager)
-
+        database = Database()
+        connection_repository = ConnectionRepository(database.connection)
+        session_repository = SessionRepository(database.connection)
+        secret_store = SecretStore()
+        session_manager = SessionManager(
+            event_bus,
+            connection_repository,
+            session_repository,
+            secret_store,
+        )
+        return cls(event_bus=event_bus, database=database, session_manager=session_manager)

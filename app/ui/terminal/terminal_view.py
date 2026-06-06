@@ -9,9 +9,11 @@ from app.ui.terminal.terminal_widget import TerminalWidget
 class TerminalView(QWidget):
     """终端视图, 连接 UI 控件和后端."""
 
-    def __init__(self, backend: TerminalBackend, parent=None) -> None:
+    def __init__(self, backend: TerminalBackend, session_id: int, connection_id: int, parent=None) -> None:
         super().__init__(parent)
         self._backend = backend
+        self.session_id = session_id
+        self.connection_id = connection_id
         self._terminal = TerminalWidget(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -31,4 +33,3 @@ class TerminalView(QWidget):
 
     def _show_closed(self, exit_code: int) -> None:
         self._terminal.append_output(f"\r\n[closed: {exit_code}]\r\n".encode("utf-8"))
-

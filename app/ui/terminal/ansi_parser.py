@@ -1,26 +1,65 @@
 from __future__ import annotations
 
+import codecs
 import re
 
 from app.ui.terminal.terminal_buffer import TerminalBuffer
 
 
-CSI_RE = re.compile(r"\x1b\[([0-9;?]*)([A-Za-z])")
+CSI_RE = re.compile(r"\x1b\[([0-9;:?=>]*)([@-~])")
+OSC_PREFIX = "\x1b]"
+OSC_BEL = "\x07"
+OSC_ST = "\x1b\\"
 
 
 class AnsiParser:
     """基础 ANSI/VT 控制序列解析器."""
 
+    def __init__(self) -> None:
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._pending = ""
+
     def feed(self, data: bytes, buffer: TerminalBuffer) -> None:
-        text = data.decode("utf-8", errors="replace")
+        text = self._pending + self._decoder.decode(data)
+        self._pending = ""
         position = 0
-        for match in CSI_RE.finditer(text):
-            if match.start() > position:
-                buffer.write_text(text[position : match.start()])
-            self._apply_csi(match.group(1), match.group(2), buffer)
-            position = match.end()
+        plain_start = 0
+        while position < len(text):
+            if text[position] != "\x1b":
+                position += 1
+                continue
+
+            if position > plain_start:
+                buffer.write_text(text[plain_start:position])
+
+            if position + 1 >= len(text):
+                self._pending = text[position:]
+                return
+
+            marker = text[position + 1]
+            if marker == "[":
+                match = CSI_RE.match(text, position)
+                if match is None:
+                    self._pending = text[position:]
+                    return
+                self._apply_csi(match.group(1), match.group(2), buffer)
+                position = match.end()
+            elif marker == "]":
+                end = self._find_osc_end(text, position + len(OSC_PREFIX))
+                if end is None:
+                    self._pending = text[position:]
+                    return
+                position = end
+            else:
+                # 跳过当前尚未支持的短 ESC 序列, 避免控制字符残片显示到终端.
+                position += 2
+
+            plain_start = position
         if position < len(text):
-            buffer.write_text(text[position:])
+            self._pending = text[position:]
+            return
+        if plain_start < len(text):
+            buffer.write_text(text[plain_start:])
 
     def _apply_csi(self, params: str, command: str, buffer: TerminalBuffer) -> None:
         numbers = self._numbers(params)
@@ -61,3 +100,11 @@ class AnsiParser:
     def _first(self, numbers: list[int]) -> int:
         return numbers[0] if numbers else 1
 
+    def _find_osc_end(self, text: str, start: int) -> int | None:
+        bel_index = text.find(OSC_BEL, start)
+        st_index = text.find(OSC_ST, start)
+        if bel_index == -1 and st_index == -1:
+            return None
+        if bel_index != -1 and (st_index == -1 or bel_index < st_index):
+            return bel_index + len(OSC_BEL)
+        return st_index + len(OSC_ST)

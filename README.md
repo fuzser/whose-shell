@@ -1,10 +1,14 @@
 # Whose Shell
 
+[English](#english) | [中文](#中文)
+
+## English
+
 Whose Shell is an open-source desktop shell tool planned for Windows, Linux, and macOS. The goal is to provide local terminals, SSH sessions, visual file management, SFTP transfers, command history, performance monitoring, and cross-platform packaging in one lightweight desktop application.
 
-This repository is currently in the planning stage. The implementation direction is described in [WhoseShell_Development_Plan.md](WhoseShell_Development_Plan.md).
+This repository now contains the first desktop implementation pieces. The long-term implementation direction is described in [WhoseShell_Development_Plan.md](WhoseShell_Development_Plan.md).
 
-## Planned Features
+### Planned Features
 
 - Local shell sessions for PowerShell, CMD, Bash, and Zsh
 - SSH remote terminal sessions with password and private key authentication
@@ -16,7 +20,34 @@ This repository is currently in the planning stage. The implementation direction
 - Connection management with secure secret storage
 - Cross-platform packaging for Windows, Linux, and macOS
 
-## Technical Direction
+### Current Session Features
+
+Whose Shell currently supports a basic session workflow:
+
+- Open a local shell session from the File menu or Sessions dock.
+- Open a new SSH shell from the File menu or Sessions dock.
+- Save local and SSH connection metadata in SQLite.
+- Store SSH passwords through the operating system keyring instead of SQLite.
+- Show saved connections and recent terminal sessions in the Sessions dock.
+- Right-click saved SSH connections to edit configuration or delete the connection.
+- Right-click terminal tabs to close the tab, edit SSH configuration, or delete the SSH connection.
+- Keep recent terminal sessions collapsed by default to preserve space in the Sessions dock.
+- Reopen the Sessions dock from the View menu after it has been closed.
+
+#### Session Storage
+
+Session and connection metadata are stored in the application data directory using `whose-shell.sqlite3`. Passwords are stored separately through `keyring`.
+
+#### Basic Usage
+
+```text
+File -> New Local Shell
+File -> New SSH Shell
+View -> Sessions
+Sessions dock -> Open
+```
+
+### Technical Direction
 
 Whose Shell is planned as a Python desktop application built around:
 
@@ -32,7 +63,7 @@ Whose Shell is planned as a Python desktop application built around:
 - PyInstaller for packaging
 - pytest for tests
 
-## Architecture Overview
+### Architecture Overview
 
 ```text
 whose-shell/
@@ -60,9 +91,9 @@ whose-shell/
 
 The UI thread should only handle Qt rendering and user interaction. Shell IO, SSH, SFTP, file scanning, monitoring, and database writes should run in worker threads or async services and communicate with the UI through Qt signals and slots.
 
-## Release Roadmap
+### Release Roadmap
 
-### v0.1 Terminal Core
+#### v0.1 Terminal Core
 
 - Main window
 - Terminal tabs
@@ -70,7 +101,7 @@ The UI thread should only handle Qt rendering and user interaction. Shell IO, SS
 - Local shell backend
 - Basic ANSI support
 
-### v0.2 SSH and History
+#### v0.2 SSH and History
 
 - SSH shell
 - Connection manager
@@ -78,20 +109,20 @@ The UI thread should only handle Qt rendering and user interaction. Shell IO, SS
 - Favorites
 - Basic settings
 
-### v0.3 File Manager
+#### v0.3 File Manager
 
 - Local file browsing
 - SFTP browsing
 - Upload and download
 - Transfer queue
 
-### v0.4 Monitoring
+#### v0.4 Monitoring
 
 - Local CPU, memory, disk, and network monitoring
 - Process table
 - Remote Linux/macOS monitoring
 
-### v0.5 Packaging and Polish
+#### v0.5 Packaging and Polish
 
 - Windows build
 - Linux build
@@ -100,7 +131,7 @@ The UI thread should only handle Qt rendering and user interaction. Shell IO, SS
 - Keyboard shortcuts
 - Documentation
 
-## Development Priorities
+### Development Priorities
 
 1. Create the project skeleton and packaging metadata.
 2. Build the main window and dock layout.
@@ -108,7 +139,7 @@ The UI thread should only handle Qt rendering and user interaction. Shell IO, SS
 4. Add local terminal backends for Windows, Linux, and macOS.
 5. Add SSH, SFTP, command history, monitoring, settings, packaging, and tests.
 
-## Design Principles
+### Design Principles
 
 - Keep terminal parsing isolated and testable.
 - Keep terminal backend interfaces stable across local and remote sessions.
@@ -116,6 +147,155 @@ The UI thread should only handle Qt rendering and user interaction. Shell IO, SS
 - Use Qt model/view classes for large file lists, process tables, history tables, and session trees.
 - Store secrets through the operating system keyring, not plain text SQLite fields.
 
-## License
+### License
 
 Whose Shell is released under the MIT License. See [LICENSE](LICENSE) for details.
+
+## 中文
+
+Whose Shell 是一个面向 Windows, Linux 和 macOS 的开源桌面 shell 工具。项目目标是在一个轻量桌面应用中提供本地终端, SSH 会话, 可视化文件管理, SFTP 传输, 命令历史, 性能监控和跨平台打包能力。
+
+本仓库已经包含第一批桌面端实现。长期开发方向见 [WhoseShell_Development_Plan.md](WhoseShell_Development_Plan.md)。
+
+### 计划功能
+
+- 支持 PowerShell, CMD, Bash 和 Zsh 的本地 shell 会话
+- 支持密码和私钥认证的 SSH 远程终端会话
+- 多标签终端工作区
+- 本地和远程文件的可视化管理
+- 带进度显示的 SFTP 上传和下载
+- 命令历史, 收藏, 搜索和重新运行
+- 本地和远程性能监控
+- 使用安全密钥存储的连接管理
+- Windows, Linux 和 macOS 跨平台打包
+
+### 当前 Session 功能
+
+当前 Whose Shell 支持基础会话流程：
+
+- 可以通过 File 菜单或 Sessions 面板打开本地 shell 会话。
+- 可以通过 File 菜单或 Sessions 面板打开新的 SSH shell。
+- 本地连接和 SSH 连接元数据会保存到 SQLite。
+- SSH 密码通过操作系统 keyring 保存, 不写入 SQLite 明文字段。
+- Sessions 面板会显示已保存连接和最近终端会话。
+- 可以右键已保存 SSH 连接来修改配置或删除连接。
+- 可以右键终端标签来关闭标签, 修改 SSH 配置或删除 SSH 连接。
+- 最近终端会话默认折叠显示, 避免占用 Sessions 面板空间。
+- 如果用户关闭了 Sessions 面板, 可以通过 View 菜单重新打开。
+
+#### Session 存储
+
+会话和连接元数据会保存在应用数据目录中的 `whose-shell.sqlite3`。密码会通过 `keyring` 单独保存。
+
+#### 基础用法
+
+```text
+File 菜单 -> New Local Shell
+File 菜单 -> New SSH Shell
+View 菜单 -> Sessions
+Sessions 面板 -> Open
+```
+
+### 技术方向
+
+Whose Shell 计划作为 Python 桌面应用构建, 主要技术包括：
+
+- 使用 PySide6 QtWidgets 构建桌面 UI
+- 使用自绘终端组件, 不把 `QTextEdit` 或 `QPlainTextEdit` 作为最终终端实现
+- 在统一的 `TerminalBackend` 接口后封装跨平台终端后端
+- Windows 本地 shell 使用 `pywinpty` / ConPTY
+- Linux 和 macOS shell 使用 `pty`, `select` 和 async 服务
+- SSH 和 SFTP 优先使用 `asyncssh`, `paramiko` 可作为备选
+- 本地性能监控使用 `psutil`
+- 命令历史和元数据使用 SQLite
+- 密码和私钥 passphrase 使用 `keyring`
+- 使用 PyInstaller 打包
+- 使用 pytest 做测试
+
+### 架构概览
+
+```text
+whose-shell/
++-- app/
+|   +-- main.py
+|   +-- bootstrap.py
+|   +-- ui/
+|   |   +-- main_window.py
+|   |   +-- terminal/
+|   |   +-- files/
+|   |   +-- monitor/
+|   |   +-- history/
+|   |   +-- sessions/
+|   |   +-- settings/
+|   +-- core/
+|   +-- backends/
+|   +-- storage/
+|   +-- common/
++-- tests/
++-- packaging/
++-- pyproject.toml
++-- README.md
++-- LICENSE
+```
+
+UI 线程只负责 Qt 渲染和用户交互。Shell IO, SSH, SFTP, 文件扫描, 性能监控和数据库写入应运行在 worker 线程或 async 服务中, 并通过 Qt signals 和 slots 与 UI 通信。
+
+### 发布路线图
+
+#### v0.1 Terminal Core
+
+- 主窗口
+- 终端标签页
+- 自定义终端组件
+- 本地 shell 后端
+- 基础 ANSI 支持
+
+#### v0.2 SSH and History
+
+- SSH shell
+- 连接管理
+- SQLite 命令历史
+- 收藏
+- 基础设置
+
+#### v0.3 File Manager
+
+- 本地文件浏览
+- SFTP 浏览
+- 上传和下载
+- 传输队列
+
+#### v0.4 Monitoring
+
+- 本地 CPU, 内存, 磁盘和网络监控
+- 进程表
+- 远程 Linux/macOS 监控
+
+#### v0.5 Packaging and Polish
+
+- Windows 构建
+- Linux 构建
+- macOS 构建
+- 主题
+- 快捷键
+- 文档
+
+### 开发优先级
+
+1. 创建项目骨架和打包元数据。
+2. 构建主窗口和 dock 布局。
+3. 实现自定义终端组件, 终端缓冲区和 ANSI 解析器。
+4. 添加 Windows, Linux 和 macOS 的本地终端后端。
+5. 添加 SSH, SFTP, 命令历史, 监控, 设置, 打包和测试。
+
+### 设计原则
+
+- 保持终端解析逻辑隔离且可测试。
+- 保持本地和远程 session 的终端后端接口稳定。
+- 不要用 shell IO, 网络 IO, 文件扫描, 性能监控或数据库写入阻塞 UI 线程。
+- 大型文件列表, 进程表, 历史表和 session 树使用 Qt model/view 类。
+- 密钥通过操作系统 keyring 保存, 不写入 SQLite 明文字段。
+
+### 许可证
+
+Whose Shell 使用 MIT License 发布。详情见 [LICENSE](LICENSE)。

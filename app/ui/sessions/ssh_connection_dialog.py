@@ -13,15 +13,15 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from app.common.models import SshConnectionConfig
+from app.common.models import ConnectionRecord, SshConnectionConfig
 
 
 class SshConnectionDialog(QDialog):
     """SSH 连接输入弹窗."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, connection: ConnectionRecord | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("New SSH Shell")
+        self.setWindowTitle("Edit SSH Connection" if connection else "New SSH Shell")
 
         self._host = QLineEdit(self)
         self._host.setPlaceholderText("example.com")
@@ -35,6 +35,13 @@ class SshConnectionDialog(QDialog):
         self._default_directory = QLineEdit(self)
         self._accept_unknown_host = QCheckBox(self)
         self._accept_unknown_host.setChecked(True)
+        if connection is not None:
+            self._host.setText(connection.host or "")
+            self._port.setValue(connection.port or 22)
+            self._username.setText(connection.username or "")
+            self._private_key.setText(connection.private_key_path or "")
+            self._default_directory.setText(connection.default_directory or "")
+            self._password.setPlaceholderText("Leave blank to keep existing password")
 
         browse_key = QPushButton("Browse", self)
         browse_key.clicked.connect(self._browse_private_key)
