@@ -33,6 +33,7 @@ class MainWindow(QMainWindow):
         self._sessions_dock_widget: QDockWidget | None = None
         self._sessions_panel: SessionsDock | None = None
         self._closed_session_ids: set[int] = set()
+        self._closing_views: list[TerminalView] = []
 
         self.setWindowTitle("Whose Shell")
         self.resize(1200, 780)
@@ -227,8 +228,17 @@ class MainWindow(QMainWindow):
             self._refresh_sessions_panel()
 
     def _cleanup_closed_tab(self, widget: TerminalView) -> None:
-        widget.stop(notify=False)
+        widget.closed.connect(lambda _exit_code, widget=widget: self._finalize_closed_tab(widget))
+        was_connected = widget.stop(notify=False)
         self._mark_session_closed(widget.session_id)
+        if was_connected:
+            self._closing_views.append(widget)
+        else:
+            self._finalize_closed_tab(widget)
+
+    def _finalize_closed_tab(self, widget: TerminalView) -> None:
+        if widget in self._closing_views:
+            self._closing_views.remove(widget)
         widget.deleteLater()
 
     def _disconnect_tab(self, index: int) -> None:

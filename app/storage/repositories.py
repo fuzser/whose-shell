@@ -175,6 +175,8 @@ class ConnectionRepository:
 class SessionRepository:
     """读写终端会话记录."""
 
+    RECENT_SESSION_LIMIT = 50
+
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
@@ -199,6 +201,7 @@ class SessionRepository:
             ),
         )
         self._connection.commit()
+        self._trim_recent_sessions()
         return self.get_session(cursor.lastrowid)
 
     def close_session(self, session_id: int, exit_code: int | None = None) -> SessionRecord:
@@ -211,6 +214,7 @@ class SessionRepository:
             (SessionStatus.CLOSED.value, exit_code, session_id, SessionStatus.CLOSED.value),
         )
         self._connection.commit()
+        self._trim_recent_sessions()
         return self.get_session(session_id)
 
     def reopen_session(self, session_id: int) -> SessionRecord:
@@ -226,7 +230,7 @@ class SessionRepository:
         self._connection.commit()
         return self.get_session(session_id)
 
-    def list_recent_sessions(self, limit: int = 50) -> list[SessionRecord]:
+    def list_recent_sessions(self, limit: int = RECENT_SESSION_LIMIT) -> list[SessionRecord]:
         rows = self._connection.execute(
             """
             SELECT * FROM sessions
@@ -236,6 +240,23 @@ class SessionRepository:
             (limit,),
         ).fetchall()
         return [self._row_to_session(row) for row in rows]
+
+    def _trim_recent_sessions(self) -> None:
+        """只保留最近 session 历史, 但不删除仍在运行的 session."""
+        self._connection.execute(
+            """
+            DELETE FROM sessions
+            WHERE status = ?
+              AND id NOT IN (
+                  SELECT id
+                  FROM sessions
+                  ORDER BY started_at DESC, id DESC
+                  LIMIT ?
+              )
+            """,
+            (SessionStatus.CLOSED.value, self.RECENT_SESSION_LIMIT),
+        )
+        self._connection.commit()
 
     def get_session(self, session_id: int) -> SessionRecord:
         row = self._connection.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PySide6.QtCore import Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
@@ -9,6 +10,8 @@ from app.ui.terminal.terminal_widget import TerminalWidget
 
 class TerminalView(QWidget):
     """终端视图, 连接 UI 控件和后端."""
+
+    closed = Signal(int)
 
     _INFO_COLOR = QColor("#88c0d0")
     _SUCCESS_COLOR = QColor("#a3be8c")
@@ -30,13 +33,15 @@ class TerminalView(QWidget):
         self._backend.output_received.connect(self._terminal.append_output)
         self._backend.connected.connect(self._show_connected)
         self._backend.error.connect(self._show_error)
-        self._backend.closed.connect(self._show_closed)
+        self._backend.closed.connect(self._handle_closed)
 
     def stop(self, notify: bool = True) -> None:
+        was_connected = self.is_connected
         if notify and self.is_connected:
             self._show_disconnecting()
         self._backend.stop()
         self.is_connected = False
+        return was_connected
 
     def reconnect(self) -> None:
         self._show_connecting()
@@ -49,9 +54,10 @@ class TerminalView(QWidget):
     def _show_error(self, message: str) -> None:
         self._terminal.append_system_message(f"[error] {message}", self._ERROR_COLOR)
 
-    def _show_closed(self, exit_code: int) -> None:
+    def _handle_closed(self, exit_code: int) -> None:
         self.is_connected = False
         self._terminal.append_system_message(f"[disconnected] Connection closed with exit code {exit_code}.", self._ERROR_COLOR)
+        self.closed.emit(exit_code)
 
     def _show_connecting(self) -> None:
         self._terminal.append_system_message("[connecting] Connecting...", self._INFO_COLOR)

@@ -39,8 +39,6 @@ class SshTerminalBackend(TerminalBackend):
         if self._worker is None:
             return
         self._worker.request_stop()
-        self._worker.wait(1500)
-        self._worker = None
 
     def _handle_worker_closed(self, exit_code: int) -> None:
         self._worker = None
