@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, field
 
 from PySide6.QtGui import QColor
@@ -21,6 +22,8 @@ class TerminalCell:
     underline: bool = False
     inverse: bool = False
     dirty: bool = True
+    width: int = 1
+    continuation: bool = False
 
 
 class TerminalBuffer:
@@ -79,7 +82,7 @@ class TerminalBuffer:
             end_col = self.cols - 1
 
         for col in range(start_col, end_col + 1):
-            self._grid[self.cursor_row][col] = TerminalCell()
+            self._clear_cell(self.cursor_row, col)
 
     def move_cursor(self, row: int, col: int) -> None:
         self.cursor_row = max(0, min(self.rows - 1, row))
@@ -126,13 +129,36 @@ class TerminalBuffer:
         return self._scrollback + self._grid
 
     def _put_char(self, char: str, foreground: QColor | None = None) -> None:
+        width = self._char_width(char)
+        if width <= 0:
+            return
+        if width == 2 and self.cursor_col == self.cols - 1:
+            self.newline()
+
+        self._clear_cell(self.cursor_row, self.cursor_col)
         self._grid[self.cursor_row][self.cursor_col] = TerminalCell(
             char=char,
             foreground=QColor(foreground or DEFAULT_FG),
+            width=width,
         )
-        self.cursor_col += 1
+        if width == 2 and self.cursor_col + 1 < self.cols:
+            self._grid[self.cursor_row][self.cursor_col + 1] = TerminalCell(continuation=True)
+        self.cursor_col += width
         if self.cursor_col >= self.cols:
             self.newline()
+
+    def _clear_cell(self, row: int, col: int) -> None:
+        cell = self._grid[row][col]
+        if cell.continuation and col > 0 and self._grid[row][col - 1].width == 2:
+            self._grid[row][col - 1] = TerminalCell()
+        if cell.width == 2 and col + 1 < self.cols:
+            self._grid[row][col + 1] = TerminalCell()
+        self._grid[row][col] = TerminalCell()
+
+    def _char_width(self, char: str) -> int:
+        if unicodedata.combining(char):
+            return 0
+        return 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
 
     def _scroll_up(self) -> None:
         self._scrollback.append(self._grid.pop(0))

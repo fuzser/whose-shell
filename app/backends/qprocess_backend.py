@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import psutil
+
 from PySide6.QtCore import QProcess, QProcessEnvironment, QTimer
 
 from app.backends.terminal_base import TerminalBackend
@@ -88,13 +90,45 @@ class QProcessTerminalBackend(TerminalBackend):
                 if char == "\r" and index + 1 < len(text) and text[index + 1] == "\n":
                     index += 1
             elif char == "\x03":
-                process_chunks.append(b"\x03")
+                if self._interrupt_child_processes():
+                    visible_chars.append("^C\r\n")
+                else:
+                    process_chunks.append(b"\x03")
                 self._pending_command = ""
             elif char == "\t" or char >= " ":
                 visible_chars.append(char)
                 self._pending_command += char
             index += 1
         return "".join(visible_chars).encode("utf-8"), b"".join(process_chunks)
+
+    def _interrupt_child_processes(self) -> bool:
+        """终止当前 shell 启动的前台子进程, 保留 shell 本身."""
+        process_id = int(self._process.processId())
+        if process_id <= 0:
+            return False
+        try:
+            shell_process = psutil.Process(process_id)
+            children = shell_process.children(recursive=True)
+        except psutil.Error:
+            return False
+
+        if not children:
+            return False
+
+        for child in children:
+            try:
+                child.terminate()
+            except psutil.Error:
+                continue
+
+        gone, alive = psutil.wait_procs(children, timeout=1.0)
+        _ = gone
+        for child in alive:
+            try:
+                child.kill()
+            except psutil.Error:
+                continue
+        return True
 
     def _skip_escape_sequence(self, text: str, start: int) -> int:
         index = start + 1

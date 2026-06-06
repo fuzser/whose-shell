@@ -71,6 +71,12 @@ class TerminalWidget(QAbstractScrollArea):
         if event.button() == Qt.LeftButton:
             self.setFocus(Qt.MouseFocusReason)
             cell = self._point_to_cell(event.position().toPoint())
+            if event.modifiers() & Qt.ShiftModifier and self._selection_anchor is not None:
+                self._selection_cursor = cell
+                self._is_selecting = False
+                self.viewport().update()
+                event.accept()
+                return
             self._selection_anchor = cell
             self._selection_cursor = cell
             self._is_selecting = True
@@ -91,8 +97,6 @@ class TerminalWidget(QAbstractScrollArea):
         if event.button() == Qt.LeftButton and self._is_selecting:
             self._selection_cursor = self._point_to_cell(event.position().toPoint())
             self._is_selecting = False
-            if self._selection_anchor == self._selection_cursor:
-                self._clear_selection()
             self.viewport().update()
             event.accept()
             return
@@ -139,7 +143,7 @@ class TerminalWidget(QAbstractScrollArea):
         for row_index, row in enumerate(self._buffer.visible_cells(self._scroll_offset)):
             y = row_index * self._cell_height + ascent
             for col_index, cell in enumerate(row):
-                if cell.char == " ":
+                if cell.continuation or cell.char == " ":
                     continue
                 painter.setPen(cell.foreground)
                 painter.drawText(col_index * self._cell_width, y, cell.char)
@@ -190,8 +194,7 @@ class TerminalWidget(QAbstractScrollArea):
         return start, end
 
     def _has_selection(self) -> bool:
-        selection = self._normalized_selection()
-        return selection is not None and selection[0] != selection[1]
+        return self._normalized_selection() is not None
 
     def _paint_selection(self, painter: QPainter) -> None:
         selection = self._normalized_selection()
@@ -226,12 +229,17 @@ class TerminalWidget(QAbstractScrollArea):
             line = lines[row]
             left_col = start_col if row == start_row else 0
             right_col = end_col if row == end_row else self._buffer.cols - 1
-            selected_lines.append(line[left_col : right_col + 1].rstrip())
+            text = line[left_col : right_col + 1]
+            if start_row != end_row and not text.strip():
+                text = ""
+            elif row != end_row:
+                text = text.rstrip()
+            selected_lines.append(text)
         return "\n".join(selected_lines)
 
     def _copy_selection(self) -> None:
-        text = self._selected_text()
-        if text:
+        if self._has_selection():
+            text = self._selected_text()
             QApplication.clipboard().setText(text)
 
     def _paste_clipboard(self) -> None:
