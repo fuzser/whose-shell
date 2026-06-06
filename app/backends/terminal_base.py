@@ -7,6 +7,7 @@ class TerminalBackend(QObject):
     """所有终端后端的统一接口."""
 
     output_received = Signal(bytes)
+    connected = Signal()
     closed = Signal(int)
     error = Signal(str)
 
@@ -21,4 +22,3 @@ class TerminalBackend(QObject):
 
     def stop(self) -> None:
         raise NotImplementedError
-

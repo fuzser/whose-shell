@@ -20,6 +20,7 @@ class QProcessTerminalBackend(TerminalBackend):
         self._process.setProcessChannelMode(QProcess.MergedChannels)
         self._process.readyReadStandardOutput.connect(self._read_output)
         self._process.readyReadStandardError.connect(self._read_output)
+        self._process.started.connect(self.connected.emit)
         self._process.finished.connect(self._handle_finished)
         self._process.errorOccurred.connect(self._handle_error)
 

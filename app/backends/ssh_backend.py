@@ -22,6 +22,7 @@ class SshTerminalBackend(TerminalBackend):
             return
         self._worker = SshTerminalWorker(self._config)
         self._worker.output_received.connect(self.output_received.emit)
+        self._worker.connected.connect(self.connected.emit)
         self._worker.closed.connect(self._handle_worker_closed)
         self._worker.error.connect(self.error.emit)
         self._worker.start()
@@ -50,6 +51,7 @@ class SshTerminalWorker(QThread):
     """在后台线程中运行 asyncssh 终端会话."""
 
     output_received = Signal(bytes)
+    connected = Signal()
     closed = Signal(int)
     error = Signal(str)
 
@@ -129,6 +131,7 @@ class SshTerminalWorker(QThread):
                 term_size=(self._cols, self._rows),
                 encoding=None,
             )
+            self.connected.emit()
             if self._config.default_directory:
                 await self._write_to_process(f"cd {self._quote_shell_path(self._config.default_directory)}\n".encode())
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QPushButton,
+    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -52,25 +53,24 @@ class SessionsDock(QWidget):
         new_ssh = QPushButton("New SSH", self)
         new_ssh.clicked.connect(self.new_ssh_requested.emit)
 
-        open_selected = QPushButton("Open", self)
-        open_selected.clicked.connect(self._open_selected_connection)
-
-        refresh = QPushButton("Refresh", self)
-        refresh.clicked.connect(self.refresh)
+        self._refresh_button = QToolButton(self)
+        self._refresh_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        self._refresh_button.setToolTip("Refresh connections and sessions")
+        self._refresh_button.clicked.connect(self._refresh_with_feedback)
 
         button_row = QHBoxLayout()
         button_row.addWidget(new_local)
         button_row.addWidget(new_ssh)
 
-        connection_button_row = QHBoxLayout()
-        connection_button_row.addWidget(open_selected)
-        connection_button_row.addWidget(refresh)
+        connection_title_row = QHBoxLayout()
+        connection_title_row.addWidget(QLabel("Connections", self))
+        connection_title_row.addStretch(1)
+        connection_title_row.addWidget(self._refresh_button)
 
         layout = QVBoxLayout(self)
         layout.addLayout(button_row)
-        layout.addWidget(QLabel("Connections", self))
+        layout.addLayout(connection_title_row)
         layout.addWidget(self._connections, 2)
-        layout.addLayout(connection_button_row)
         layout.addWidget(self._recent_toggle)
         layout.addWidget(self._recent_sessions, 1)
 
@@ -88,6 +88,15 @@ class SessionsDock(QWidget):
         for session in recent_sessions:
             self._add_session(session)
         self._update_recent_toggle_text(len(recent_sessions))
+        self._refresh_button.setEnabled(True)
+
+    def _refresh_with_feedback(self) -> None:
+        """给用户明确的手动刷新反馈."""
+        self._refresh_button.setEnabled(False)
+        self._connections.clear()
+        self._recent_sessions.clear()
+        self._update_recent_toggle_text(0)
+        QTimer.singleShot(300, self.refresh)
 
     def _add_connection(self, connection: ConnectionRecord) -> None:
         label = connection.name

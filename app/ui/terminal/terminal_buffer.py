@@ -35,7 +35,7 @@ class TerminalBuffer:
         self._grid = [self._blank_line() for _ in range(rows)]
         self._scrollback: list[list[TerminalCell]] = []
 
-    def write_text(self, text: str) -> None:
+    def write_text(self, text: str, foreground: QColor | None = None) -> None:
         for char in text:
             if char == "\n":
                 self.newline()
@@ -45,9 +45,9 @@ class TerminalBuffer:
                 self.cursor_col = max(0, self.cursor_col - 1)
             elif char == "\t":
                 spaces = 4 - (self.cursor_col % 4)
-                self.write_text(" " * spaces)
+                self.write_text(" " * spaces, foreground)
             elif char >= " ":
-                self._put_char(char)
+                self._put_char(char, foreground)
 
     def newline(self) -> None:
         self.cursor_col = 0
@@ -81,8 +81,14 @@ class TerminalBuffer:
     def visible_lines(self) -> list[str]:
         return ["".join(cell.char for cell in row) for row in self._grid]
 
-    def _put_char(self, char: str) -> None:
-        self._grid[self.cursor_row][self.cursor_col] = TerminalCell(char=char)
+    def visible_cells(self) -> list[list[TerminalCell]]:
+        return self._grid
+
+    def _put_char(self, char: str, foreground: QColor | None = None) -> None:
+        self._grid[self.cursor_row][self.cursor_col] = TerminalCell(
+            char=char,
+            foreground=QColor(foreground or DEFAULT_FG),
+        )
         self.cursor_col += 1
         if self.cursor_col >= self.cols:
             self.newline()

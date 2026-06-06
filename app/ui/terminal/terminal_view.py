@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from app.backends.terminal_base import TerminalBackend
@@ -8,6 +9,10 @@ from app.ui.terminal.terminal_widget import TerminalWidget
 
 class TerminalView(QWidget):
     """终端视图, 连接 UI 控件和后端."""
+
+    _INFO_COLOR = QColor("#88c0d0")
+    _SUCCESS_COLOR = QColor("#a3be8c")
+    _ERROR_COLOR = QColor("#bf616a")
 
     def __init__(self, backend: TerminalBackend, session_id: int, connection_id: int, parent=None) -> None:
         super().__init__(parent)
@@ -23,19 +28,37 @@ class TerminalView(QWidget):
         self._terminal.input_requested.connect(self._backend.write)
         self._terminal.resized.connect(self._backend.resize)
         self._backend.output_received.connect(self._terminal.append_output)
+        self._backend.connected.connect(self._show_connected)
         self._backend.error.connect(self._show_error)
         self._backend.closed.connect(self._show_closed)
 
-    def stop(self) -> None:
+    def stop(self, notify: bool = True) -> None:
+        if notify and self.is_connected:
+            self._show_disconnecting()
         self._backend.stop()
         self.is_connected = False
 
     def reconnect(self) -> None:
+        self._show_connecting()
         self._backend.start()
         self.is_connected = True
 
+    def show_connecting(self) -> None:
+        self._show_connecting()
+
     def _show_error(self, message: str) -> None:
-        self._terminal.append_output(f"\r\n[error] {message}\r\n".encode("utf-8"))
+        self._terminal.append_system_message(f"[error] {message}", self._ERROR_COLOR)
 
     def _show_closed(self, exit_code: int) -> None:
-        self._terminal.append_output(f"\r\n[closed: {exit_code}]\r\n".encode("utf-8"))
+        self.is_connected = False
+        self._terminal.append_system_message(f"[disconnected] Connection closed with exit code {exit_code}.", self._ERROR_COLOR)
+
+    def _show_connecting(self) -> None:
+        self._terminal.append_system_message("[connecting] Connecting...", self._INFO_COLOR)
+
+    def _show_connected(self) -> None:
+        self.is_connected = True
+        self._terminal.append_system_message("[connected] Connection established.", self._SUCCESS_COLOR)
+
+    def _show_disconnecting(self) -> None:
+        self._terminal.append_system_message("[disconnecting] Disconnecting...", self._ERROR_COLOR)

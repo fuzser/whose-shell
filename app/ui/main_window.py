@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QDockWidget, QMainWindow, QMenu, QMessageBox, QTabWidget
 
@@ -19,12 +19,14 @@ class MainWindow(QMainWindow):
 
     _CONNECTED_PREFIX = "🟢 "
     _DISCONNECTED_PREFIX = "🔴 "
+    _TAB_CLOSE_CLEANUP_DELAY_MS = 80
 
     def __init__(self, context: AppContext) -> None:
         super().__init__()
         self._context = context
         self._tabs = QTabWidget(self)
         self._tabs.setTabsClosable(True)
+        self._tabs.setMovable(True)
         self._tabs.tabCloseRequested.connect(self._close_tab)
         self._tabs.tabBar().setContextMenuPolicy(Qt.CustomContextMenu)
         self._tabs.tabBar().customContextMenuRequested.connect(self._show_tab_menu)
@@ -147,6 +149,7 @@ class MainWindow(QMainWindow):
         index = self._tabs.addTab(view, self._tab_title(title, connected=True))
         self._tabs.tabBar().setTabData(index, title)
         self._tabs.setCurrentIndex(index)
+        view.show_connecting()
         managed_session.backend.start()
 
     def _show_tab_menu(self, position) -> None:
@@ -202,16 +205,31 @@ class MainWindow(QMainWindow):
         for index in range(self._tabs.count() - 1, -1, -1):
             widget = self._tabs.widget(index)
             if isinstance(widget, TerminalView) and widget.connection_id == connection_id:
-                self._close_tab(index)
+                self._close_tab(index, defer_cleanup=False)
 
-    def _close_tab(self, index: int) -> None:
+    def _close_tab(self, index: int, defer_cleanup: bool = True) -> None:
         widget = self._tabs.widget(index)
-        if isinstance(widget, TerminalView):
-            widget.stop()
-            self._mark_session_closed(widget.session_id)
+        if widget is None:
+            return
         self._tabs.removeTab(index)
+        self._tabs.tabBar().update()
+        self._tabs.update()
+        if isinstance(widget, TerminalView):
+            if defer_cleanup:
+                QTimer.singleShot(
+                    self._TAB_CLOSE_CLEANUP_DELAY_MS,
+                    lambda widget=widget: self._cleanup_closed_tab(widget),
+                )
+            else:
+                self._cleanup_closed_tab(widget)
+        else:
+            widget.deleteLater()
+            self._refresh_sessions_panel()
+
+    def _cleanup_closed_tab(self, widget: TerminalView) -> None:
+        widget.stop(notify=False)
+        self._mark_session_closed(widget.session_id)
         widget.deleteLater()
-        self._refresh_sessions_panel()
 
     def _disconnect_tab(self, index: int) -> None:
         widget = self._tabs.widget(index)
@@ -267,7 +285,6 @@ class MainWindow(QMainWindow):
         for index in range(self._tabs.count()):
             widget = self._tabs.widget(index)
             if isinstance(widget, TerminalView):
-                widget.stop()
-                self._mark_session_closed(widget.session_id)
+                self._cleanup_closed_tab(widget)
         self._context.database.close()
         super().closeEvent(event)
