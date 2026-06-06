@@ -23,6 +23,8 @@ class SshConnectionDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Edit SSH Connection" if connection else "New SSH Shell")
 
+        self._name = QLineEdit(self)
+        self._name.setPlaceholderText("Production Server")
         self._host = QLineEdit(self)
         self._host.setPlaceholderText("example.com")
         self._port = QSpinBox(self)
@@ -36,6 +38,7 @@ class SshConnectionDialog(QDialog):
         self._accept_unknown_host = QCheckBox(self)
         self._accept_unknown_host.setChecked(True)
         if connection is not None:
+            self._name.setText(connection.name)
             self._host.setText(connection.host or "")
             self._port.setValue(connection.port or 22)
             self._username.setText(connection.username or "")
@@ -51,6 +54,7 @@ class SshConnectionDialog(QDialog):
         key_row.addWidget(browse_key)
 
         form = QFormLayout()
+        form.addRow("Connection name", self._name)
         form.addRow("Host", self._host)
         form.addRow("Port", self._port)
         form.addRow("Username", self._username)
@@ -76,6 +80,7 @@ class SshConnectionDialog(QDialog):
             host=self._host.text().strip(),
             port=self._port.value(),
             username=self._username.text().strip(),
+            name=self._name.text().strip() or None,
             password=password,
             private_key_path=private_key_path,
             default_directory=default_directory,

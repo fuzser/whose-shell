@@ -105,7 +105,7 @@ class MainWindow(QMainWindow):
             return
         config = dialog.connection_config()
         managed_session = self._context.session_manager.create_ssh_terminal(config)
-        self._add_terminal_tab(managed_session, f"SSH {config.username}@{config.host}")
+        self._add_terminal_tab(managed_session, managed_session.session.title)
         self._refresh_sessions_panel()
 
     def _open_connection(self, connection_id: int) -> None:
@@ -119,7 +119,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != SshConnectionDialog.Accepted:
             return
         updated = self._context.session_manager.update_ssh_connection(connection_id, dialog.connection_config())
-        self._rename_tabs_for_connection(connection_id, f"SSH {updated.username}@{updated.host}")
+        self._rename_tabs_for_connection(connection_id, updated.name)
         self._refresh_sessions_panel()
 
     def _delete_connection(self, connection_id: int) -> None:

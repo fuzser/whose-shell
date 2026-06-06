@@ -23,7 +23,7 @@ class QProcessTerminalBackend(TerminalBackend):
         self._process.started.connect(self.connected.emit)
         self._process.finished.connect(self._handle_finished)
         self._process.errorOccurred.connect(self._handle_error)
-        self._echo_input_length = 0
+        self._pending_command = ""
 
     def start(self) -> None:
         command = self._config.command or default_shell_command()
@@ -36,10 +36,11 @@ class QProcessTerminalBackend(TerminalBackend):
 
     def write(self, data: bytes) -> None:
         if self._process.state() == QProcess.Running:
-            self._process.write(data)
-            echo_data = self._local_echo_data(data)
+            echo_data, process_data = self._handle_local_input(data)
             if echo_data:
                 self.output_received.emit(echo_data)
+            if process_data:
+                self._process.write(process_data)
 
     def resize(self, cols: int, rows: int) -> None:
         _ = (cols, rows)
@@ -65,10 +66,11 @@ class QProcessTerminalBackend(TerminalBackend):
         if self._process.state() != QProcess.NotRunning:
             self._process.kill()
 
-    def _local_echo_data(self, data: bytes) -> bytes:
-        # QProcess stdin 没有真实 console echo, 这里仅回显安全的文本输入.
+    def _handle_local_input(self, data: bytes) -> tuple[bytes, bytes]:
+        # QProcess stdin 不是 PTY, 先在本地完成行编辑, 回车时再提交最终命令.
         text = data.decode("utf-8", errors="ignore")
         visible_chars: list[str] = []
+        process_chunks: list[bytes] = []
         index = 0
         while index < len(text):
             char = text[index]
@@ -76,19 +78,23 @@ class QProcessTerminalBackend(TerminalBackend):
                 index = self._skip_escape_sequence(text, index)
                 continue
             if char == "\b":
-                if self._echo_input_length > 0:
+                if self._pending_command:
                     visible_chars.append("\b \b")
-                    self._echo_input_length -= 1
-            elif char in {"\t", "\r", "\n"} or char >= " ":
+                    self._pending_command = self._pending_command[:-1]
+            elif char in {"\r", "\n"}:
+                visible_chars.append("\r\n")
+                process_chunks.append((self._pending_command + "\r\n").encode("utf-8"))
+                self._pending_command = ""
+                if char == "\r" and index + 1 < len(text) and text[index + 1] == "\n":
+                    index += 1
+            elif char == "\x03":
+                process_chunks.append(b"\x03")
+                self._pending_command = ""
+            elif char == "\t" or char >= " ":
                 visible_chars.append(char)
-                if char in {"\r", "\n"}:
-                    self._echo_input_length = 0
-                elif char == "\t":
-                    self._echo_input_length += 4
-                else:
-                    self._echo_input_length += 1
+                self._pending_command += char
             index += 1
-        return "".join(visible_chars).encode("utf-8")
+        return "".join(visible_chars).encode("utf-8"), b"".join(process_chunks)
 
     def _skip_escape_sequence(self, text: str, start: int) -> int:
         index = start + 1

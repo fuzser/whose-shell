@@ -32,7 +32,7 @@ class ConnectionRepository:
 
     def save_ssh_connection(self, config: SshConnectionConfig) -> ConnectionRecord:
         auth_method = self._auth_method(config)
-        name = f"{config.username}@{config.host}:{config.port}"
+        name = self._connection_name(config)
         existing = self._connection.execute(
             """
             SELECT * FROM connections
@@ -88,7 +88,7 @@ class ConnectionRepository:
     def update_ssh_connection(self, connection_id: int, config: SshConnectionConfig) -> ConnectionRecord:
         """更新已保存 SSH 连接配置."""
         auth_method = self._auth_method(config)
-        name = f"{config.username}@{config.host}:{config.port}"
+        name = self._connection_name(config)
         self._connection.execute(
             """
             UPDATE connections
@@ -156,6 +156,9 @@ class ConnectionRepository:
         if config.password:
             return "password"
         return "none"
+
+    def _connection_name(self, config: SshConnectionConfig) -> str:
+        return config.name or f"{config.username}@{config.host}:{config.port}"
 
     def _row_to_connection(self, row: sqlite3.Row) -> ConnectionRecord:
         return ConnectionRecord(

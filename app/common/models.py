@@ -36,6 +36,7 @@ class SshConnectionConfig:
     host: str
     port: int
     username: str
+    name: str | None = None
     password: str | None = None
     private_key_path: str | None = None
     default_directory: str | None = None

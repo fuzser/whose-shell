@@ -52,10 +52,10 @@ class SessionManager(QObject):
                 self._secrets.set_connection_password(connection.id, config.password)
             except Exception as exc:
                 self._event_bus.status_message.emit(f"SSH password was not saved: {exc}")
-        title = f"SSH {config.username}@{config.host}"
+        title = connection.name
         session = self._sessions.create_session(connection, title, config.default_directory)
         backend = SshTerminalBackend(config)
-        self._event_bus.status_message.emit(f"SSH session #{session.id} created for {config.username}@{config.host}.")
+        self._event_bus.status_message.emit(f"SSH session #{session.id} created for {connection.name}.")
         return ManagedTerminalSession(backend=backend, session=session)
 
     def create_terminal_from_connection(self, connection_id: int) -> ManagedTerminalSession:
@@ -121,11 +121,12 @@ class SessionManager(QObject):
             host=connection.host,
             port=connection.port,
             username=connection.username,
+            name=connection.name,
             password=password,
             private_key_path=connection.private_key_path,
             default_directory=connection.default_directory,
         )
-        title = f"SSH {connection.username}@{connection.host}"
+        title = connection.name
         session = self._sessions.create_session(connection, title, connection.default_directory)
         backend = SshTerminalBackend(config)
         self._event_bus.status_message.emit(f"SSH session #{session.id} opened from saved connection.")
