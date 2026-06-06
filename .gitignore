@@ -1,0 +1,65 @@
+# Local agent/workspace instructions
+AGENTS.md
+.agents/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build and packaging output
+build/
+dist/
+*.egg-info/
+*.spec
+
+# PyInstaller temporary files
+*.manifest
+*.log
+
+# Local app data and databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Secrets and environment files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test and coverage reports
+junit.xml
+coverage.xml
+reports/
+
+# Runtime files
+logs/
+tmp/
+temp/
