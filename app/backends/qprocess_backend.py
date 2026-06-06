@@ -43,6 +43,7 @@ class QProcessTerminalBackend(TerminalBackend):
     def stop(self) -> None:
         if self._process.state() != QProcess.NotRunning:
             self._process.terminate()
+            self._process.waitForFinished(1500)
 
     def _read_output(self) -> None:
         data = bytes(self._process.readAllStandardOutput())
@@ -54,4 +55,3 @@ class QProcessTerminalBackend(TerminalBackend):
 
     def _handle_error(self, error: QProcess.ProcessError) -> None:
         self.error.emit(f"Process error: {error.name}")
-

@@ -73,6 +73,12 @@ class SessionManager(QObject):
         self._event_bus.status_message.emit(f"Session #{session.id} closed.")
         return session
 
+    def reopen_session(self, session_id: int) -> SessionRecord:
+        """标记会话已重新连接."""
+        session = self._sessions.reopen_session(session_id)
+        self._event_bus.status_message.emit(f"Session #{session.id} reconnected.")
+        return session
+
     def list_connections(self) -> list[ConnectionRecord]:
         return self._connections.list_connections()
 

@@ -22,7 +22,7 @@ class SshTerminalBackend(TerminalBackend):
             return
         self._worker = SshTerminalWorker(self._config)
         self._worker.output_received.connect(self.output_received.emit)
-        self._worker.closed.connect(self.closed.emit)
+        self._worker.closed.connect(self._handle_worker_closed)
         self._worker.error.connect(self.error.emit)
         self._worker.start()
 
@@ -40,6 +40,10 @@ class SshTerminalBackend(TerminalBackend):
         self._worker.request_stop()
         self._worker.wait(1500)
         self._worker = None
+
+    def _handle_worker_closed(self, exit_code: int) -> None:
+        self._worker = None
+        self.closed.emit(exit_code)
 
 
 class SshTerminalWorker(QThread):

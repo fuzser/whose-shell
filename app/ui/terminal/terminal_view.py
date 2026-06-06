@@ -14,6 +14,7 @@ class TerminalView(QWidget):
         self._backend = backend
         self.session_id = session_id
         self.connection_id = connection_id
+        self.is_connected = True
         self._terminal = TerminalWidget(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -27,6 +28,11 @@ class TerminalView(QWidget):
 
     def stop(self) -> None:
         self._backend.stop()
+        self.is_connected = False
+
+    def reconnect(self) -> None:
+        self._backend.start()
+        self.is_connected = True
 
     def _show_error(self, message: str) -> None:
         self._terminal.append_output(f"\r\n[error] {message}\r\n".encode("utf-8"))

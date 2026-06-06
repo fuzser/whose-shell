@@ -17,6 +17,9 @@ from app.ui.terminal.terminal_view import TerminalView
 class MainWindow(QMainWindow):
     """主窗口和基础 Dock 布局."""
 
+    _CONNECTED_PREFIX = "🟢 "
+    _DISCONNECTED_PREFIX = "🔴 "
+
     def __init__(self, context: AppContext) -> None:
         super().__init__()
         self._context = context
@@ -139,9 +142,10 @@ class MainWindow(QMainWindow):
             self,
         )
         managed_session.backend.closed.connect(
-            lambda exit_code, session_id=managed_session.session.id: self._mark_session_closed(session_id, exit_code)
+            lambda exit_code, session_id=managed_session.session.id: self._handle_terminal_closed(session_id, exit_code)
         )
-        index = self._tabs.addTab(view, title)
+        index = self._tabs.addTab(view, self._tab_title(title, connected=True))
+        self._tabs.tabBar().setTabData(index, title)
         self._tabs.setCurrentIndex(index)
         managed_session.backend.start()
 
@@ -158,19 +162,21 @@ class MainWindow(QMainWindow):
 
         menu = QMenu(self)
         close_action = menu.addAction("Close Tab")
+        lifecycle_action = menu.addAction("Disconnect" if widget.is_connected else "Reconnect")
         menu.addSeparator()
         edit_action = menu.addAction("Edit Configuration")
-        delete_action = menu.addAction("Delete Connection")
         edit_action.setEnabled(is_ssh)
-        delete_action.setEnabled(is_ssh)
 
         selected = menu.exec(self._tabs.tabBar().mapToGlobal(position))
         if selected == close_action:
             self._close_tab(tab_index)
+        elif selected == lifecycle_action:
+            if widget.is_connected:
+                self._disconnect_tab(tab_index)
+            else:
+                self._reconnect_tab(tab_index)
         elif selected == edit_action and is_ssh:
             self._edit_connection(widget.connection_id)
-        elif selected == delete_action and is_ssh:
-            self._delete_connection(widget.connection_id)
 
     def _show_sessions_dock(self) -> None:
         if self._sessions_dock_widget is None:
@@ -189,7 +195,8 @@ class MainWindow(QMainWindow):
         for index in range(self._tabs.count()):
             widget = self._tabs.widget(index)
             if isinstance(widget, TerminalView) and widget.connection_id == connection_id:
-                self._tabs.setTabText(index, title)
+                self._tabs.tabBar().setTabData(index, title)
+                self._set_tab_connected(index, widget.is_connected)
 
     def _close_tabs_for_connection(self, connection_id: int) -> None:
         for index in range(self._tabs.count() - 1, -1, -1):
@@ -206,12 +213,55 @@ class MainWindow(QMainWindow):
         widget.deleteLater()
         self._refresh_sessions_panel()
 
+    def _disconnect_tab(self, index: int) -> None:
+        widget = self._tabs.widget(index)
+        if not isinstance(widget, TerminalView) or not widget.is_connected:
+            return
+        widget.stop()
+        self._mark_session_closed(widget.session_id)
+        self._set_tab_connected(index, False)
+
+    def _reconnect_tab(self, index: int) -> None:
+        widget = self._tabs.widget(index)
+        if not isinstance(widget, TerminalView) or widget.is_connected:
+            return
+        widget.reconnect()
+        self._closed_session_ids.discard(widget.session_id)
+        self._context.session_manager.reopen_session(widget.session_id)
+        self._set_tab_connected(index, True)
+        self._refresh_sessions_panel()
+
+    def _handle_terminal_closed(self, session_id: int, exit_code: int) -> None:
+        for index in range(self._tabs.count()):
+            widget = self._tabs.widget(index)
+            if isinstance(widget, TerminalView) and widget.session_id == session_id:
+                widget.is_connected = False
+                self._set_tab_connected(index, False)
+                break
+        self._mark_session_closed(session_id, exit_code)
+
     def _mark_session_closed(self, session_id: int, exit_code: int | None = None) -> None:
         if session_id in self._closed_session_ids:
             return
         self._closed_session_ids.add(session_id)
         self._context.session_manager.close_session(session_id, exit_code)
         self._refresh_sessions_panel()
+
+    def _set_tab_connected(self, index: int, connected: bool) -> None:
+        widget = self._tabs.widget(index)
+        if isinstance(widget, TerminalView):
+            widget.is_connected = connected
+        title = self._tabs.tabBar().tabData(index) or self._plain_tab_title(self._tabs.tabText(index))
+        self._tabs.setTabText(index, self._tab_title(str(title), connected))
+
+    def _tab_title(self, title: str, connected: bool) -> str:
+        return f"{self._CONNECTED_PREFIX if connected else self._DISCONNECTED_PREFIX}{title}"
+
+    def _plain_tab_title(self, title: str) -> str:
+        for prefix in (self._CONNECTED_PREFIX, self._DISCONNECTED_PREFIX):
+            if title.startswith(prefix):
+                return title[len(prefix) :]
+        return title
 
     def closeEvent(self, event) -> None:
         for index in range(self._tabs.count()):

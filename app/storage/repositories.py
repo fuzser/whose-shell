@@ -213,6 +213,19 @@ class SessionRepository:
         self._connection.commit()
         return self.get_session(session_id)
 
+    def reopen_session(self, session_id: int) -> SessionRecord:
+        """将同一个标签页 session 标记为重新连接中."""
+        self._connection.execute(
+            """
+            UPDATE sessions
+            SET status = ?, ended_at = NULL, exit_code = NULL
+            WHERE id = ?
+            """,
+            (SessionStatus.RUNNING.value, session_id),
+        )
+        self._connection.commit()
+        return self.get_session(session_id)
+
     def list_recent_sessions(self, limit: int = 50) -> list[SessionRecord]:
         rows = self._connection.execute(
             """
