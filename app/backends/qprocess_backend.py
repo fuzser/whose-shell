@@ -23,6 +23,7 @@ class QProcessTerminalBackend(TerminalBackend):
         self._process.started.connect(self.connected.emit)
         self._process.finished.connect(self._handle_finished)
         self._process.errorOccurred.connect(self._handle_error)
+        self._echo_input_length = 0
 
     def start(self) -> None:
         command = self._config.command or default_shell_command()
@@ -36,6 +37,9 @@ class QProcessTerminalBackend(TerminalBackend):
     def write(self, data: bytes) -> None:
         if self._process.state() == QProcess.Running:
             self._process.write(data)
+            echo_data = self._local_echo_data(data)
+            if echo_data:
+                self.output_received.emit(echo_data)
 
     def resize(self, cols: int, rows: int) -> None:
         _ = (cols, rows)
@@ -60,3 +64,39 @@ class QProcessTerminalBackend(TerminalBackend):
     def _kill_if_still_running(self) -> None:
         if self._process.state() != QProcess.NotRunning:
             self._process.kill()
+
+    def _local_echo_data(self, data: bytes) -> bytes:
+        # QProcess stdin 没有真实 console echo, 这里仅回显安全的文本输入.
+        text = data.decode("utf-8", errors="ignore")
+        visible_chars: list[str] = []
+        index = 0
+        while index < len(text):
+            char = text[index]
+            if char == "\x1b":
+                index = self._skip_escape_sequence(text, index)
+                continue
+            if char == "\b":
+                if self._echo_input_length > 0:
+                    visible_chars.append("\b \b")
+                    self._echo_input_length -= 1
+            elif char in {"\t", "\r", "\n"} or char >= " ":
+                visible_chars.append(char)
+                if char in {"\r", "\n"}:
+                    self._echo_input_length = 0
+                elif char == "\t":
+                    self._echo_input_length += 4
+                else:
+                    self._echo_input_length += 1
+            index += 1
+        return "".join(visible_chars).encode("utf-8")
+
+    def _skip_escape_sequence(self, text: str, start: int) -> int:
+        index = start + 1
+        if index >= len(text):
+            return len(text)
+        if text[index] == "[":
+            index += 1
+            while index < len(text) and not ("@" <= text[index] <= "~"):
+                index += 1
+            return min(len(text), index + 1)
+        return min(len(text), index + 1)

@@ -61,9 +61,25 @@ class TerminalBuffer:
         self.cursor_col = 0
         self.cursor_row = 0
 
-    def clear_line(self) -> None:
-        self._grid[self.cursor_row] = self._blank_line()
-        self.cursor_col = 0
+    def clear_console(self) -> None:
+        """清空当前 console 显示和本地 scrollback."""
+        self._scrollback.clear()
+        self.clear_screen()
+
+    def clear_line(self, mode: int = 0) -> None:
+        """按 ANSI EL 模式清理当前行, 不改变光标位置."""
+        if mode == 1:
+            start_col = 0
+            end_col = self.cursor_col
+        elif mode == 2:
+            start_col = 0
+            end_col = self.cols - 1
+        else:
+            start_col = self.cursor_col
+            end_col = self.cols - 1
+
+        for col in range(start_col, end_col + 1):
+            self._grid[self.cursor_row][col] = TerminalCell()
 
     def move_cursor(self, row: int, col: int) -> None:
         self.cursor_row = max(0, min(self.rows - 1, row))

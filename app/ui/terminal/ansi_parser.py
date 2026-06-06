@@ -66,7 +66,7 @@ class AnsiParser:
         if command == "J":
             buffer.clear_screen()
         elif command == "K":
-            buffer.clear_line()
+            buffer.clear_line(numbers[0] if numbers else 0)
         elif command in {"H", "f"}:
             row = (numbers[0] - 1) if numbers else 0
             col = (numbers[1] - 1) if len(numbers) > 1 else 0

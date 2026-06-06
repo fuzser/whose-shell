@@ -29,7 +29,7 @@ class SshTerminalBackend(TerminalBackend):
 
     def write(self, data: bytes) -> None:
         if self._worker is not None:
-            self._worker.write(data)
+            self._worker.write(self._normalize_terminal_input(data))
 
     def resize(self, cols: int, rows: int) -> None:
         if self._worker is not None:
@@ -43,6 +43,10 @@ class SshTerminalBackend(TerminalBackend):
     def _handle_worker_closed(self, exit_code: int) -> None:
         self._worker = None
         self.closed.emit(exit_code)
+
+    def _normalize_terminal_input(self, data: bytes) -> bytes:
+        # 远端 PTY 的 Enter 使用 CR, 避免 CRLF 触发一次命令和一次空命令.
+        return data.replace(b"\r\n", b"\r")
 
 
 class SshTerminalWorker(QThread):
