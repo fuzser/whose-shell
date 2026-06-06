@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QMouseEvent, QPainter, QPaintEvent
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QMouseEvent, QPainter, QPaintEvent, QWheelEvent
 from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QMenu
 
 from app.ui.terminal.ansi_parser import AnsiParser
@@ -25,6 +25,7 @@ class TerminalWidget(QAbstractScrollArea):
         self._selection_anchor: tuple[int, int] | None = None
         self._selection_cursor: tuple[int, int] | None = None
         self._is_selecting = False
+        self._scroll_offset = 0
         self._cursor_visible = True
         self._cursor_timer = QTimer(self)
         self._cursor_timer.setInterval(530)
@@ -34,18 +35,23 @@ class TerminalWidget(QAbstractScrollArea):
         self.setCursor(Qt.IBeamCursor)
         self.viewport().setCursor(Qt.IBeamCursor)
         self.viewport().setAutoFillBackground(False)
+        self.verticalScrollBar().valueChanged.connect(self._handle_scrollbar_changed)
         self._recalculate_grid()
 
     def append_output(self, data: bytes) -> None:
         self._parser.feed(data, self._buffer)
+        self._scroll_offset = min(self._scroll_offset, self._buffer.max_scroll_offset())
         self._clear_selection()
         self._reset_cursor_blink()
+        self._sync_scrollbar()
         self.viewport().update()
 
     def append_system_message(self, message: str, color: QColor) -> None:
         self._buffer.write_text(f"\r\n{message}\r\n", color)
+        self._scroll_offset = min(self._scroll_offset, self._buffer.max_scroll_offset())
         self._clear_selection()
         self._reset_cursor_blink()
+        self._sync_scrollbar()
         self.viewport().update()
 
     def resizeEvent(self, event) -> None:
@@ -92,6 +98,17 @@ class TerminalWidget(QAbstractScrollArea):
             return
         super().mouseReleaseEvent(event)
 
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        delta = event.angleDelta().y()
+        if delta == 0:
+            super().wheelEvent(event)
+            return
+
+        step = max(1, self.verticalScrollBar().singleStep())
+        direction = 1 if delta > 0 else -1
+        self._set_scroll_offset(self._scroll_offset + direction * step, keep_selection=self._is_selecting)
+        event.accept()
+
     def contextMenuEvent(self, event) -> None:
         menu = QMenu(self)
         copy_action = menu.addAction("Copy")
@@ -119,7 +136,7 @@ class TerminalWidget(QAbstractScrollArea):
 
         metrics = QFontMetrics(self._font)
         ascent = metrics.ascent()
-        for row_index, row in enumerate(self._buffer.visible_cells()):
+        for row_index, row in enumerate(self._buffer.visible_cells(self._scroll_offset)):
             y = row_index * self._cell_height + ascent
             for col_index, cell in enumerate(row):
                 if cell.char == " ":
@@ -130,10 +147,11 @@ class TerminalWidget(QAbstractScrollArea):
         self._paint_cursor(painter)
 
     def _paint_cursor(self, painter: QPainter) -> None:
-        if not self._cursor_visible:
+        if not self._cursor_visible or self._scroll_offset != 0:
             return
+        visible_start = self._buffer.visible_start_index(self._scroll_offset)
         x = self._buffer.cursor_col * self._cell_width
-        y = self._buffer.cursor_row * self._cell_height
+        y = (self._buffer.cursor_line_index() - visible_start) * self._cell_height
         painter.fillRect(x, y, max(2, self._cell_width), self._cell_height, QColor("#eceff4"))
 
     def _blink_cursor(self) -> None:
@@ -151,12 +169,15 @@ class TerminalWidget(QAbstractScrollArea):
         cols = max(20, self.viewport().width() // self._cell_width)
         rows = max(8, self.viewport().height() // self._cell_height)
         self._buffer.resize(cols, rows)
+        self._scroll_offset = min(self._scroll_offset, self._buffer.max_scroll_offset())
         self._clamp_selection_to_grid()
+        self._sync_scrollbar()
         self.resized.emit(cols, rows)
 
     def _point_to_cell(self, point: QPoint) -> tuple[int, int]:
         col = max(0, min(self._buffer.cols - 1, point.x() // self._cell_width))
-        row = max(0, min(self._buffer.rows - 1, point.y() // self._cell_height))
+        visible_row = max(0, min(self._buffer.rows - 1, point.y() // self._cell_height))
+        row = self._buffer.visible_start_index(self._scroll_offset) + visible_row
         return row, col
 
     def _normalized_selection(self) -> tuple[tuple[int, int], tuple[int, int]] | None:
@@ -177,15 +198,18 @@ class TerminalWidget(QAbstractScrollArea):
         if selection is None:
             return
 
+        visible_start = self._buffer.visible_start_index(self._scroll_offset)
+        visible_end = visible_start + self._buffer.rows - 1
         (start_row, start_col), (end_row, end_col) = selection
         painter.setBrush(QColor("#3b4252"))
         painter.setPen(Qt.NoPen)
-        for row in range(start_row, end_row + 1):
+        for row in range(max(start_row, visible_start), min(end_row, visible_end) + 1):
+            screen_row = row - visible_start
             left_col = start_col if row == start_row else 0
             right_col = end_col if row == end_row else self._buffer.cols - 1
             painter.drawRect(
                 left_col * self._cell_width,
-                row * self._cell_height,
+                screen_row * self._cell_height,
                 (right_col - left_col + 1) * self._cell_width,
                 self._cell_height,
             )
@@ -196,7 +220,7 @@ class TerminalWidget(QAbstractScrollArea):
             return ""
 
         (start_row, start_col), (end_row, end_col) = selection
-        lines = self._buffer.visible_lines()
+        lines = self._buffer.all_lines()
         selected_lines: list[str] = []
         for row in range(start_row, end_row + 1):
             line = lines[row]
@@ -218,8 +242,10 @@ class TerminalWidget(QAbstractScrollArea):
 
     def _clear_console(self) -> None:
         self._buffer.clear_console()
+        self._scroll_offset = 0
         self._clear_selection()
         self._reset_cursor_blink()
+        self._sync_scrollbar()
         self.viewport().update()
 
     def _clear_selection(self) -> None:
@@ -236,6 +262,30 @@ class TerminalWidget(QAbstractScrollArea):
     def _clamp_cell(self, cell: tuple[int, int]) -> tuple[int, int]:
         row, col = cell
         return (
-            max(0, min(self._buffer.rows - 1, row)),
+            max(0, min(self._buffer.total_line_count() - 1, row)),
             max(0, min(self._buffer.cols - 1, col)),
         )
+
+    def _set_scroll_offset(self, offset: int, keep_selection: bool = False) -> None:
+        self._scroll_offset = max(0, min(offset, self._buffer.max_scroll_offset()))
+        if not keep_selection:
+            self._clear_selection()
+        self._sync_scrollbar()
+        self.viewport().update()
+
+    def _sync_scrollbar(self) -> None:
+        scrollbar = self.verticalScrollBar()
+        max_offset = self._buffer.max_scroll_offset()
+        value = max_offset - self._scroll_offset
+        was_blocked = scrollbar.blockSignals(True)
+        scrollbar.setRange(0, max_offset)
+        scrollbar.setPageStep(self._buffer.rows)
+        scrollbar.setSingleStep(max(1, self._buffer.rows // 3))
+        scrollbar.setValue(value)
+        scrollbar.blockSignals(was_blocked)
+
+    def _handle_scrollbar_changed(self, value: int) -> None:
+        self._scroll_offset = self._buffer.max_scroll_offset() - value
+        if not self._is_selecting:
+            self._clear_selection()
+        self.viewport().update()

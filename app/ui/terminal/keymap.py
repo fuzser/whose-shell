@@ -14,8 +14,8 @@ SPECIAL_KEYS = {
     Qt.Key_PageUp: b"\x1b[5~",
     Qt.Key_PageDown: b"\x1b[6~",
     Qt.Key_Backspace: b"\b",
-    Qt.Key_Return: b"\r\n",
-    Qt.Key_Enter: b"\r\n",
+    Qt.Key_Return: b"\r",
+    Qt.Key_Enter: b"\r",
     Qt.Key_Tab: b"\t",
 }
 
@@ -36,4 +36,3 @@ class KeyMapper:
         if Qt.Key_A <= key <= Qt.Key_Z:
             return bytes([key - Qt.Key_A + 1])
         return b""
-

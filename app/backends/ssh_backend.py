@@ -45,8 +45,8 @@ class SshTerminalBackend(TerminalBackend):
         self.closed.emit(exit_code)
 
     def _normalize_terminal_input(self, data: bytes) -> bytes:
-        # 远端 PTY 的 Enter 使用 CR, 避免 CRLF 触发一次命令和一次空命令.
-        return data.replace(b"\r\n", b"\r")
+        # 远端 PTY 的 Enter 使用 CR, 避免 CRLF/LF 触发额外空命令.
+        return data.replace(b"\r\n", b"\r").replace(b"\n", b"\r")
 
 
 class SshTerminalWorker(QThread):
@@ -135,7 +135,7 @@ class SshTerminalWorker(QThread):
             )
             self.connected.emit()
             if self._config.default_directory:
-                await self._write_to_process(f"cd {self._quote_shell_path(self._config.default_directory)}\n".encode())
+                await self._write_to_process(f"cd {self._quote_shell_path(self._config.default_directory)}\r".encode())
 
             reader = asyncio.create_task(self._read_output())
             writer = asyncio.create_task(self._write_input())

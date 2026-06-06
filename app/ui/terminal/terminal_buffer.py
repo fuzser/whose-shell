@@ -94,11 +94,36 @@ class TerminalBuffer:
         self._grid = new_grid
         self.move_cursor(self.cursor_row, self.cursor_col)
 
-    def visible_lines(self) -> list[str]:
-        return ["".join(cell.char for cell in row) for row in self._grid]
+    def max_scroll_offset(self) -> int:
+        """返回可向上回滚的历史行数."""
+        return len(self._scrollback)
 
-    def visible_cells(self) -> list[list[TerminalCell]]:
-        return self._grid
+    def total_line_count(self) -> int:
+        return len(self._scrollback) + len(self._grid)
+
+    def cursor_line_index(self) -> int:
+        return len(self._scrollback) + self.cursor_row
+
+    def visible_start_index(self, scroll_offset: int = 0) -> int:
+        offset = max(0, min(scroll_offset, self.max_scroll_offset()))
+        return max(0, self.total_line_count() - self.rows - offset)
+
+    def all_lines(self) -> list[str]:
+        return ["".join(cell.char for cell in row) for row in self._all_cells()]
+
+    def visible_lines(self, scroll_offset: int = 0) -> list[str]:
+        return ["".join(cell.char for cell in row) for row in self.visible_cells(scroll_offset)]
+
+    def visible_cells(self, scroll_offset: int = 0) -> list[list[TerminalCell]]:
+        all_cells = self._all_cells()
+        start = self.visible_start_index(scroll_offset)
+        visible = all_cells[start : start + self.rows]
+        if len(visible) < self.rows:
+            visible = [self._blank_line() for _ in range(self.rows - len(visible))] + visible
+        return visible
+
+    def _all_cells(self) -> list[list[TerminalCell]]:
+        return self._scrollback + self._grid
 
     def _put_char(self, char: str, foreground: QColor | None = None) -> None:
         self._grid[self.cursor_row][self.cursor_col] = TerminalCell(
