@@ -36,7 +36,9 @@ class TerminalBuffer:
         self.cursor_col = 0
         self.cursor_row = 0
         self._grid = [self._blank_line() for _ in range(rows)]
+        self._grid_wraps = [False for _ in range(rows)]
         self._scrollback: list[list[TerminalCell]] = []
+        self._scrollback_wraps: list[bool] = []
 
     def write_text(self, text: str, foreground: QColor | None = None) -> None:
         for char in text:
@@ -52,7 +54,9 @@ class TerminalBuffer:
             elif char >= " ":
                 self._put_char(char, foreground)
 
-    def newline(self) -> None:
+    def newline(self, soft_wrap: bool = False) -> None:
+        if soft_wrap and 0 <= self.cursor_row < len(self._grid_wraps):
+            self._grid_wraps[self.cursor_row] = True
         self.cursor_col = 0
         self.cursor_row += 1
         if self.cursor_row >= self.rows:
@@ -61,6 +65,7 @@ class TerminalBuffer:
 
     def clear_screen(self) -> None:
         self._grid = [self._blank_line() for _ in range(self.rows)]
+        self._grid_wraps = [False for _ in range(self.rows)]
         self.cursor_col = 0
         self.cursor_row = 0
 
@@ -89,13 +94,30 @@ class TerminalBuffer:
         self.cursor_col = max(0, min(self.cols - 1, col))
 
     def resize(self, cols: int, rows: int) -> None:
-        self.cols = max(1, cols)
-        self.rows = max(1, rows)
-        new_grid = [self._blank_line() for _ in range(self.rows)]
-        for row_index, row in enumerate(self._grid[: self.rows]):
-            new_grid[row_index][: min(len(row), self.cols)] = row[: self.cols]
-        self._grid = new_grid
-        self.move_cursor(self.cursor_row, self.cursor_col)
+        new_cols = max(1, cols)
+        new_rows = max(1, rows)
+        if new_cols == self.cols and new_rows == self.rows:
+            return
+
+        old_cursor_index = self.cursor_line_index()
+        logical_lines, cursor_line, cursor_offset = self._logical_lines_with_cursor(old_cursor_index)
+        wrapped_lines, new_cursor_index, new_cursor_col = self._wrap_logical_lines(
+            logical_lines,
+            new_cols,
+            cursor_line,
+            cursor_offset,
+        )
+
+        self.cols = new_cols
+        self.rows = new_rows
+        self._scrollback = []
+        self._scrollback_wraps = []
+        self._grid = [self._blank_line() for _ in range(self.rows)]
+        self._grid_wraps = [False for _ in range(self.rows)]
+        top_padding, visible_start = self._load_wrapped_lines(wrapped_lines)
+        self._scrollback = self._scrollback[-self.scrollback_limit :]
+        self._scrollback_wraps = self._scrollback_wraps[-self.scrollback_limit :]
+        self._place_cursor_after_resize(new_cursor_index, new_cursor_col, top_padding, visible_start)
 
     def max_scroll_offset(self) -> int:
         """返回可向上回滚的历史行数."""
@@ -128,12 +150,141 @@ class TerminalBuffer:
     def _all_cells(self) -> list[list[TerminalCell]]:
         return self._scrollback + self._grid
 
+    def _all_wraps(self) -> list[bool]:
+        return self._scrollback_wraps + self._grid_wraps
+
+    def _logical_lines_with_cursor(self, cursor_line_index: int) -> tuple[list[str], int, int]:
+        lines = self._all_cells()
+        wraps = self._all_wraps()
+        last_content_index = self._last_content_line_index(lines, wraps)
+        last_line_index = max(cursor_line_index, last_content_index)
+        lines = lines[: last_line_index + 1]
+        wraps = wraps[: last_line_index + 1]
+        logical_lines: list[str] = []
+        current_parts: list[str] = []
+        current_index = 0
+        cursor_line = 0
+        cursor_offset = 0
+
+        for row_index, row in enumerate(lines):
+            row_text = self._row_text(row)
+            row_start = sum(len(part) for part in current_parts)
+            if row_index == cursor_line_index:
+                cursor_line = current_index
+                cursor_offset = row_start + self._cursor_text_offset(row, self.cursor_col)
+
+            current_parts.append(row_text)
+            if self._is_soft_wrapped_row(row_index, lines, wraps):
+                continue
+
+            logical_lines.append("".join(current_parts))
+            current_parts = []
+            current_index += 1
+
+        if current_parts:
+            logical_lines.append("".join(current_parts))
+        if not logical_lines:
+            logical_lines.append("")
+        return logical_lines, min(cursor_line, len(logical_lines) - 1), cursor_offset
+
+    def _last_content_line_index(self, lines: list[list[TerminalCell]], wraps: list[bool]) -> int:
+        for index in range(len(lines) - 1, -1, -1):
+            if self._row_text(lines[index]) or wraps[index]:
+                return index
+        return 0
+
+    def _wrap_logical_lines(
+        self,
+        logical_lines: list[str],
+        cols: int,
+        cursor_line: int,
+        cursor_offset: int,
+    ) -> tuple[list[tuple[str, bool]], int, int]:
+        wrapped_lines: list[tuple[str, bool]] = []
+        new_cursor_index = 0
+        new_cursor_col = 0
+
+        for line_index, line in enumerate(logical_lines):
+            if line_index == cursor_line:
+                new_cursor_index = len(wrapped_lines) + (cursor_offset // cols)
+                new_cursor_col = cursor_offset % cols
+
+            if not line:
+                wrapped_lines.append(("", False))
+                continue
+
+            start = 0
+            while start < len(line):
+                end = start + cols
+                wrapped_lines.append((line[start:end], end < len(line)))
+                start += cols
+
+        if not wrapped_lines:
+            wrapped_lines.append(("", False))
+        return wrapped_lines, min(new_cursor_index, len(wrapped_lines) - 1), new_cursor_col
+
+    def _load_wrapped_lines(self, wrapped_lines: list[tuple[str, bool]]) -> tuple[int, int]:
+        visible_lines = wrapped_lines[-self.rows :]
+        scrollback_lines = wrapped_lines[: -self.rows]
+        self._scrollback = [self._line_to_cells(line) for line, _ in scrollback_lines]
+        self._scrollback_wraps = [soft_wrap for _, soft_wrap in scrollback_lines]
+        bottom_padding = max(0, self.rows - len(visible_lines))
+        self._grid = [self._line_to_cells(line) for line, _ in visible_lines]
+        self._grid_wraps = [soft_wrap for _, soft_wrap in visible_lines]
+        self._grid.extend(self._blank_line() for _ in range(bottom_padding))
+        self._grid_wraps.extend(False for _ in range(bottom_padding))
+        visible_start = len(scrollback_lines)
+        return 0, visible_start
+
+    def _place_cursor_after_resize(
+        self,
+        cursor_index: int,
+        cursor_col: int,
+        top_padding: int,
+        visible_start: int,
+    ) -> None:
+        self.cursor_row = max(0, min(self.rows - 1, top_padding + cursor_index - visible_start))
+        self.cursor_col = max(0, min(self.cols - 1, cursor_col))
+
+    def _row_text(self, row: list[TerminalCell]) -> str:
+        return "".join(cell.char for cell in row if not cell.continuation).rstrip()
+
+    def _cursor_text_offset(self, row: list[TerminalCell], cursor_col: int) -> int:
+        offset = 0
+        for col, cell in enumerate(row[:cursor_col]):
+            if cell.continuation:
+                continue
+            offset += max(1, cell.width)
+        return offset
+
+    def _is_soft_wrapped_row(self, row_index: int, lines: list[list[TerminalCell]], wraps: list[bool]) -> bool:
+        if row_index >= len(lines) - 1:
+            return False
+        if not self._row_text(lines[row_index + 1]):
+            return False
+        return wraps[row_index]
+
+    def _line_to_cells(self, line: str) -> list[TerminalCell]:
+        cells = self._blank_line()
+        col = 0
+        for char in line:
+            width = self._char_width(char)
+            if width <= 0:
+                continue
+            if col >= self.cols or (width == 2 and col == self.cols - 1):
+                break
+            cells[col] = TerminalCell(char=char, width=width)
+            if width == 2 and col + 1 < self.cols:
+                cells[col + 1] = TerminalCell(continuation=True)
+            col += width
+        return cells
+
     def _put_char(self, char: str, foreground: QColor | None = None) -> None:
         width = self._char_width(char)
         if width <= 0:
             return
         if width == 2 and self.cursor_col == self.cols - 1:
-            self.newline()
+            self.newline(soft_wrap=True)
 
         self._clear_cell(self.cursor_row, self.cursor_col)
         self._grid[self.cursor_row][self.cursor_col] = TerminalCell(
@@ -145,7 +296,7 @@ class TerminalBuffer:
             self._grid[self.cursor_row][self.cursor_col + 1] = TerminalCell(continuation=True)
         self.cursor_col += width
         if self.cursor_col >= self.cols:
-            self.newline()
+            self.newline(soft_wrap=True)
 
     def _clear_cell(self, row: int, col: int) -> None:
         cell = self._grid[row][col]
@@ -162,9 +313,12 @@ class TerminalBuffer:
 
     def _scroll_up(self) -> None:
         self._scrollback.append(self._grid.pop(0))
+        self._scrollback_wraps.append(self._grid_wraps.pop(0))
         if len(self._scrollback) > self.scrollback_limit:
             self._scrollback.pop(0)
+            self._scrollback_wraps.pop(0)
         self._grid.append(self._blank_line())
+        self._grid_wraps.append(False)
 
     def _blank_line(self) -> list[TerminalCell]:
         return [TerminalCell() for _ in range(self.cols)]

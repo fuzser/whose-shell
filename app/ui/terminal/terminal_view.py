@@ -64,7 +64,8 @@ class TerminalView(QWidget):
 
     def _show_connected(self) -> None:
         self.is_connected = True
-        self._terminal.append_system_message("[connected] Connection established.", self._SUCCESS_COLOR)
+        # 真实 PTY 会用绝对坐标重绘输入行, 连接提示不能留在同一个终端坐标空间里.
+        self._terminal.clear_console()
 
     def _show_disconnecting(self) -> None:
         self._terminal.append_system_message("[disconnecting] Disconnecting...", self._ERROR_COLOR)

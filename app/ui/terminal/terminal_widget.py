@@ -54,6 +54,15 @@ class TerminalWidget(QAbstractScrollArea):
         self._sync_scrollbar()
         self.viewport().update()
 
+    def clear_console(self) -> None:
+        """清空当前终端显示内容."""
+        self._buffer.clear_console()
+        self._scroll_offset = 0
+        self._clear_selection()
+        self._reset_cursor_blink()
+        self._sync_scrollbar()
+        self.viewport().update()
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._recalculate_grid()
@@ -128,7 +137,7 @@ class TerminalWidget(QAbstractScrollArea):
         elif selected == paste_action:
             self._paste_clipboard()
         elif selected == clear_action:
-            self._clear_console()
+            self.clear_console()
         event.accept()
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -247,14 +256,6 @@ class TerminalWidget(QAbstractScrollArea):
         if text:
             self._clear_selection()
             self.input_requested.emit(text.encode("utf-8"))
-
-    def _clear_console(self) -> None:
-        self._buffer.clear_console()
-        self._scroll_offset = 0
-        self._clear_selection()
-        self._reset_cursor_blink()
-        self._sync_scrollbar()
-        self.viewport().update()
 
     def _clear_selection(self) -> None:
         self._selection_anchor = None
