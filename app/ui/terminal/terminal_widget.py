@@ -6,7 +6,8 @@ from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QMenu
 
 from app.ui.terminal.ansi_parser import AnsiParser
 from app.ui.terminal.keymap import KeyMapper
-from app.ui.terminal.terminal_buffer import DEFAULT_BG, DEFAULT_FG, TerminalBuffer
+from app.ui.terminal.terminal_buffer import TerminalBuffer
+from app.ui.terminal.terminal_style import DEFAULT_BG, DEFAULT_FG
 
 
 class TerminalWidget(QAbstractScrollArea):
@@ -58,6 +59,15 @@ class TerminalWidget(QAbstractScrollArea):
     def clear_console(self) -> None:
         """清空当前终端显示内容."""
         self._buffer.clear_console()
+        self._scroll_offset = 0
+        self._clear_selection()
+        self._reset_cursor_blink()
+        self._sync_scrollbar()
+        self.viewport().update()
+
+    def clear_screen(self) -> None:
+        """只清空活动屏幕, 保留 scrollback 历史."""
+        self._buffer.clear_screen()
         self._scroll_offset = 0
         self._clear_selection()
         self._reset_cursor_blink()
@@ -179,19 +189,50 @@ class TerminalWidget(QAbstractScrollArea):
         painter = QPainter(self.viewport())
         painter.fillRect(self.viewport().rect(), DEFAULT_BG)
         painter.setFont(self._font)
+        self._paint_cell_backgrounds(painter)
         self._paint_selection(painter)
 
         metrics = QFontMetrics(self._font)
         ascent = metrics.ascent()
+        current_font_key: tuple[bool, bool, bool] | None = None
         for row_index, row in enumerate(self._buffer.visible_cells(self._scroll_offset)):
             y = row_index * self._cell_height + ascent
             for col_index, cell in enumerate(row):
                 if cell.continuation or cell.char == " ":
                     continue
-                painter.setPen(cell.foreground)
+                font_key = (cell.bold, cell.italic, cell.underline)
+                if font_key != current_font_key:
+                    painter.setFont(self._font_for_cell(cell.bold, cell.italic, cell.underline))
+                    current_font_key = font_key
+                foreground = cell.background if cell.inverse else cell.foreground
+                painter.setPen(foreground)
                 painter.drawText(col_index * self._cell_width, y, cell.char)
 
         self._paint_cursor(painter)
+
+    def _paint_cell_backgrounds(self, painter: QPainter) -> None:
+        for row_index, row in enumerate(self._buffer.visible_cells(self._scroll_offset)):
+            y = row_index * self._cell_height
+            for col_index, cell in enumerate(row):
+                if cell.continuation:
+                    continue
+                background = cell.foreground if cell.inverse else cell.background
+                if background == DEFAULT_BG:
+                    continue
+                painter.fillRect(
+                    col_index * self._cell_width,
+                    y,
+                    max(1, cell.width) * self._cell_width,
+                    self._cell_height,
+                    background,
+                )
+
+    def _font_for_cell(self, bold: bool, italic: bool, underline: bool) -> QFont:
+        font = QFont(self._font)
+        font.setBold(bold)
+        font.setItalic(italic)
+        font.setUnderline(underline)
+        return font
 
     def _paint_cursor(self, painter: QPainter) -> None:
         if not self._cursor_enabled or not self._cursor_visible or self._scroll_offset != 0:

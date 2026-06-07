@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from app.common.signals import EventBus
 from app.core.session_manager import SessionManager
+from app.core.terminal_manager import TerminalManager
 from app.storage.db import Database
 from app.storage.repositories import ConnectionRepository, SessionRepository
 from app.storage.secrets import SecretStore
@@ -16,6 +17,7 @@ class AppContext:
     event_bus: EventBus
     database: Database
     session_manager: SessionManager
+    terminal_manager: TerminalManager
 
     @classmethod
     def create_default(cls) -> "AppContext":
@@ -30,4 +32,10 @@ class AppContext:
             session_repository,
             secret_store,
         )
-        return cls(event_bus=event_bus, database=database, session_manager=session_manager)
+        terminal_manager = TerminalManager(session_manager)
+        return cls(
+            event_bus=event_bus,
+            database=database,
+            session_manager=session_manager,
+            terminal_manager=terminal_manager,
+        )

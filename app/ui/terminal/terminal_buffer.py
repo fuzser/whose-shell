@@ -5,9 +5,7 @@ from dataclasses import dataclass, field
 
 from PySide6.QtGui import QColor
 
-
-DEFAULT_FG = QColor("#d8dee9")
-DEFAULT_BG = QColor("#111318")
+from app.ui.terminal.terminal_style import DEFAULT_BG, DEFAULT_FG, TerminalStyle, default_style, style_with_foreground
 
 
 @dataclass
@@ -40,7 +38,15 @@ class TerminalBuffer:
         self._scrollback: list[list[TerminalCell]] = []
         self._scrollback_wraps: list[bool] = []
 
-    def write_text(self, text: str, foreground: QColor | None = None) -> None:
+    def write_text(
+        self,
+        text: str,
+        foreground: QColor | None = None,
+        style: TerminalStyle | None = None,
+    ) -> None:
+        active_style = style.copy() if style is not None else default_style()
+        if foreground is not None:
+            active_style = style_with_foreground(active_style, foreground)
         for char in text:
             if char == "\n":
                 self.newline()
@@ -50,9 +56,9 @@ class TerminalBuffer:
                 self.cursor_col = max(0, self.cursor_col - 1)
             elif char == "\t":
                 spaces = 4 - (self.cursor_col % 4)
-                self.write_text(" " * spaces, foreground)
+                self.write_text(" " * spaces, style=active_style)
             elif char >= " ":
-                self._put_char(char, foreground)
+                self._put_char(char, active_style)
 
     def newline(self, soft_wrap: bool = False) -> None:
         if soft_wrap and 0 <= self.cursor_row < len(self._grid_wraps):
@@ -292,7 +298,7 @@ class TerminalBuffer:
             col += width
         return cells
 
-    def _put_char(self, char: str, foreground: QColor | None = None) -> None:
+    def _put_char(self, char: str, style: TerminalStyle) -> None:
         width = self._char_width(char)
         if width <= 0:
             return
@@ -302,7 +308,12 @@ class TerminalBuffer:
         self._clear_cell(self.cursor_row, self.cursor_col)
         self._grid[self.cursor_row][self.cursor_col] = TerminalCell(
             char=char,
-            foreground=QColor(foreground or DEFAULT_FG),
+            foreground=QColor(style.foreground),
+            background=QColor(style.background),
+            bold=style.bold,
+            italic=style.italic,
+            underline=style.underline,
+            inverse=style.inverse,
             width=width,
         )
         if width == 2 and self.cursor_col + 1 < self.cols:

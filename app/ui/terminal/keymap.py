@@ -13,7 +13,7 @@ SPECIAL_KEYS = {
     Qt.Key_End: b"\x1b[F",
     Qt.Key_PageUp: b"\x1b[5~",
     Qt.Key_PageDown: b"\x1b[6~",
-    Qt.Key_Backspace: b"\b",
+    Qt.Key_Backspace: b"\x7f",
     Qt.Key_Return: b"\r",
     Qt.Key_Enter: b"\r",
     Qt.Key_Tab: b"\t",

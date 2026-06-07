@@ -4,6 +4,7 @@ import codecs
 import re
 
 from app.ui.terminal.terminal_buffer import TerminalBuffer
+from app.ui.terminal.terminal_style import TerminalStyle, apply_sgr, default_style
 
 
 CSI_RE = re.compile(r"\x1b\[([0-9;:?=>]*)([@-~])")
@@ -18,6 +19,7 @@ class AnsiParser:
     def __init__(self) -> None:
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._pending = ""
+        self._style: TerminalStyle = default_style()
 
     def feed(self, data: bytes, buffer: TerminalBuffer) -> None:
         text = self._pending + self._decoder.decode(data)
@@ -30,7 +32,7 @@ class AnsiParser:
                 continue
 
             if position > plain_start:
-                buffer.write_text(text[plain_start:position])
+                buffer.write_text(text[plain_start:position], style=self._style)
 
             if position + 1 >= len(text):
                 self._pending = text[position:]
@@ -59,7 +61,7 @@ class AnsiParser:
             self._pending = text[position:]
             return
         if plain_start < len(text):
-            buffer.write_text(text[plain_start:])
+            buffer.write_text(text[plain_start:], style=self._style)
 
     def _apply_csi(self, params: str, command: str, buffer: TerminalBuffer) -> None:
         numbers = self._numbers(params)
@@ -80,8 +82,7 @@ class AnsiParser:
         elif command == "D":
             buffer.move_cursor(buffer.cursor_row, buffer.cursor_col - self._first(numbers))
         elif command == "m":
-            # TODO: 接入颜色和样式状态, 当前先跳过 SGR 防止控制码显示.
-            return
+            self._style = apply_sgr(self._style, numbers)
 
     def _numbers(self, params: str) -> list[int]:
         if not params:

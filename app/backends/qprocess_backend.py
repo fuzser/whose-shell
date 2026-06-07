@@ -79,7 +79,7 @@ class QProcessTerminalBackend(TerminalBackend):
             if char == "\x1b":
                 index = self._skip_escape_sequence(text, index)
                 continue
-            if char == "\b":
+            if char in {"\b", "\x7f"}:
                 if self._pending_command:
                     visible_chars.append("\b \b")
                     self._pending_command = self._pending_command[:-1]
