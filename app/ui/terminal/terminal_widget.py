@@ -13,6 +13,8 @@ from app.ui.terminal.terminal_style import DEFAULT_BG, DEFAULT_FG
 class TerminalWidget(QAbstractScrollArea):
     """自绘终端控件."""
 
+    _SNAPSHOT_HEADER = "__WHOSE_SHELL_TERMINAL_SNAPSHOT_V1__"
+
     input_requested = Signal(bytes)
     resized = Signal(int, int)
 
@@ -67,7 +69,7 @@ class TerminalWidget(QAbstractScrollArea):
 
     def clear_screen(self) -> None:
         """只清空活动屏幕, 保留 scrollback 历史."""
-        self._buffer.clear_screen()
+        self._buffer.clear_screen(2, reset_cursor=True)
         self._scroll_offset = 0
         self._clear_selection()
         self._reset_cursor_blink()
@@ -84,19 +86,24 @@ class TerminalWidget(QAbstractScrollArea):
 
     def content_snapshot(self) -> str:
         """导出当前终端文本快照."""
-        lines = self._buffer.all_lines()
-        while lines and not lines[-1].strip():
-            lines.pop()
-        return "\n".join(line.rstrip() for line in lines)
+        text = "\n".join(self._buffer.text_snapshot_lines())
+        return f"{self._SNAPSHOT_HEADER}\n{text}" if text else ""
 
     def restore_content_snapshot(self, content: str) -> None:
         """恢复退出前保存的终端文本快照."""
         self.clear_console()
         if content:
-            self._buffer.write_text(content)
+            self._buffer.write_text(self._decode_content_snapshot(content))
         self._scroll_offset = 0
         self._sync_scrollbar()
         self.viewport().update()
+
+    def _decode_content_snapshot(self, content: str) -> str:
+        if content.startswith(f"{self._SNAPSHOT_HEADER}\n"):
+            return content.split("\n", 1)[1]
+        if content == self._SNAPSHOT_HEADER:
+            return ""
+        return self._repair_legacy_narrow_snapshot(content)
 
     def set_terminal_cursor_enabled(self, enabled: bool) -> None:
         """控制终端输入光标是否可见."""
@@ -283,6 +290,55 @@ class TerminalWidget(QAbstractScrollArea):
         if has_usable_viewport:
             self.resized.emit(cols, rows)
         return has_usable_viewport
+
+    def _repair_legacy_narrow_snapshot(self, content: str) -> str:
+        """兼容旧版本保存的窄屏幕行快照."""
+        lines = content.splitlines()
+        if len(lines) < 2:
+            return content
+
+        repaired: list[str] = []
+        index = 0
+        while index < len(lines):
+            run = [lines[index]]
+            while index + 1 < len(lines) and self._looks_like_legacy_wrap(run[-1], lines[index + 1]):
+                run.append(lines[index + 1])
+                index += 1
+
+            if len(run) >= 2:
+                repaired.append(self._join_legacy_wrap_run(run))
+            else:
+                repaired.extend(run)
+            index += 1
+
+        suffix = "\n" if content.endswith("\n") else ""
+        return "\n".join(repaired) + suffix
+
+    def _join_legacy_wrap_run(self, run: list[str]) -> str:
+        text = run[0]
+        for part in run[1:]:
+            token = text.rsplit(" ", 1)[-1]
+            if text and part and token.isalpha() and len(token) > 1 and part[0].isdigit():
+                text += " "
+            text += part
+        return text
+
+    def _looks_like_legacy_wrap(self, current_line: str, next_line: str) -> bool:
+        if not next_line:
+            return False
+        current_width = len(current_line)
+        if current_width < 18 or current_width > 40:
+            return False
+        stripped_next = next_line.lstrip()
+        if not stripped_next:
+            return False
+        if stripped_next.startswith(("[", "* ", "- ")):
+            return False
+        if stripped_next.startswith(("root@", "$", "#")):
+            return False
+        if stripped_next[0].isupper() and not next_line.startswith(" "):
+            return False
+        return True
 
     def _point_to_cell(self, point: QPoint) -> tuple[int, int]:
         col = max(0, min(self._buffer.cols - 1, point.x() // self._cell_width))

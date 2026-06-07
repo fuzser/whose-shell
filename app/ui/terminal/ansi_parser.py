@@ -66,7 +66,7 @@ class AnsiParser:
     def _apply_csi(self, params: str, command: str, buffer: TerminalBuffer) -> None:
         numbers = self._numbers(params)
         if command == "J":
-            buffer.clear_screen()
+            buffer.clear_screen(numbers[0] if numbers else 0)
         elif command == "K":
             buffer.clear_line(numbers[0] if numbers else 0)
         elif command in {"H", "f"}:
@@ -81,6 +81,14 @@ class AnsiParser:
             buffer.move_cursor(buffer.cursor_row, buffer.cursor_col + self._first(numbers))
         elif command == "D":
             buffer.move_cursor(buffer.cursor_row, buffer.cursor_col - self._first(numbers))
+        elif command == "G":
+            buffer.move_cursor_col(self._first(numbers) - 1)
+        elif command == "d":
+            buffer.move_cursor_row(self._first(numbers) - 1)
+        elif command == "s":
+            buffer.save_cursor()
+        elif command == "u":
+            buffer.restore_cursor()
         elif command == "m":
             self._style = apply_sgr(self._style, numbers)
 

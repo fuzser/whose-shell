@@ -33,6 +33,8 @@ class TerminalBuffer:
         self.scrollback_limit = scrollback_limit
         self.cursor_col = 0
         self.cursor_row = 0
+        self._saved_cursor_col = 0
+        self._saved_cursor_row = 0
         self._grid = [self._blank_line() for _ in range(rows)]
         self._grid_wraps = [False for _ in range(rows)]
         self._scrollback: list[list[TerminalCell]] = []
@@ -69,17 +71,36 @@ class TerminalBuffer:
             self._scroll_up()
             self.cursor_row = self.rows - 1
 
-    def clear_screen(self) -> None:
-        self._grid = [self._blank_line() for _ in range(self.rows)]
-        self._grid_wraps = [False for _ in range(self.rows)]
-        self.cursor_col = 0
-        self.cursor_row = 0
+    def clear_screen(self, mode: int = 0, reset_cursor: bool = False) -> None:
+        """按 ANSI ED 模式清理活动屏幕."""
+        if mode == 3:
+            self._scrollback.clear()
+            self._scrollback_wraps.clear()
+            mode = 2
+
+        if mode == 1:
+            for row in range(0, self.cursor_row):
+                self._clear_row(row)
+            for col in range(0, self.cursor_col + 1):
+                self._clear_cell(self.cursor_row, col)
+        elif mode == 2:
+            self._grid = [self._blank_line() for _ in range(self.rows)]
+            self._grid_wraps = [False for _ in range(self.rows)]
+        else:
+            for col in range(self.cursor_col, self.cols):
+                self._clear_cell(self.cursor_row, col)
+            for row in range(self.cursor_row + 1, self.rows):
+                self._clear_row(row)
+
+        if reset_cursor:
+            self.cursor_col = 0
+            self.cursor_row = 0
 
     def clear_console(self) -> None:
         """清空当前 console 显示和本地 scrollback."""
         self._scrollback.clear()
         self._scrollback_wraps.clear()
-        self.clear_screen()
+        self.clear_screen(2, reset_cursor=True)
 
     def archive_screen_to_scrollback(self) -> None:
         """把当前屏幕内容归档到 scrollback, 然后清空活动屏幕."""
@@ -91,7 +112,7 @@ class TerminalBuffer:
             self._scrollback_wraps.append(self._grid_wraps[row_index])
         self._scrollback = self._scrollback[-self.scrollback_limit :]
         self._scrollback_wraps = self._scrollback_wraps[-self.scrollback_limit :]
-        self.clear_screen()
+        self.clear_screen(2, reset_cursor=True)
 
     def clear_line(self, mode: int = 0) -> None:
         """按 ANSI EL 模式清理当前行, 不改变光标位置."""
@@ -111,6 +132,19 @@ class TerminalBuffer:
     def move_cursor(self, row: int, col: int) -> None:
         self.cursor_row = max(0, min(self.rows - 1, row))
         self.cursor_col = max(0, min(self.cols - 1, col))
+
+    def move_cursor_col(self, col: int) -> None:
+        self.move_cursor(self.cursor_row, col)
+
+    def move_cursor_row(self, row: int) -> None:
+        self.move_cursor(row, self.cursor_col)
+
+    def save_cursor(self) -> None:
+        self._saved_cursor_row = self.cursor_row
+        self._saved_cursor_col = self.cursor_col
+
+    def restore_cursor(self) -> None:
+        self.move_cursor(self._saved_cursor_row, self._saved_cursor_col)
 
     def resize(self, cols: int, rows: int) -> None:
         new_cols = max(1, cols)
@@ -155,6 +189,28 @@ class TerminalBuffer:
     def all_lines(self) -> list[str]:
         return ["".join(cell.char for cell in row) for row in self._all_cells()]
 
+    def text_snapshot_lines(self) -> list[str]:
+        """导出逻辑文本行, 保留硬换行并合并终端软换行."""
+        cells = self._all_cells()
+        wraps = self._all_wraps()
+        last_content_index = self._last_content_line_index(cells, wraps)
+        logical_lines: list[str] = []
+        current_parts: list[str] = []
+
+        for row_index, row in enumerate(cells[: last_content_index + 1]):
+            is_soft_wrapped = self._is_soft_wrapped_row(row_index, cells, wraps)
+            current_parts.append(self._row_text(row) if not is_soft_wrapped else self._row_text_with_padding(row))
+            if is_soft_wrapped:
+                continue
+            logical_lines.append("".join(current_parts))
+            current_parts = []
+
+        if current_parts:
+            logical_lines.append("".join(current_parts))
+        while logical_lines and not logical_lines[-1].strip():
+            logical_lines.pop()
+        return logical_lines
+
     def visible_lines(self, scroll_offset: int = 0) -> list[str]:
         return ["".join(cell.char for cell in row) for row in self.visible_cells(scroll_offset)]
 
@@ -186,14 +242,15 @@ class TerminalBuffer:
         cursor_offset = 0
 
         for row_index, row in enumerate(lines):
-            row_text = self._row_text(row)
+            is_soft_wrapped = self._is_soft_wrapped_row(row_index, lines, wraps)
+            row_text = self._row_text(row) if not is_soft_wrapped else self._row_text_with_padding(row)
             row_start = sum(len(part) for part in current_parts)
             if row_index == cursor_line_index:
                 cursor_line = current_index
                 cursor_offset = row_start + self._cursor_text_offset(row, self.cursor_col)
 
             current_parts.append(row_text)
-            if self._is_soft_wrapped_row(row_index, lines, wraps):
+            if is_soft_wrapped:
                 continue
 
             logical_lines.append("".join(current_parts))
@@ -268,6 +325,9 @@ class TerminalBuffer:
     def _row_text(self, row: list[TerminalCell]) -> str:
         return "".join(cell.char for cell in row if not cell.continuation).rstrip()
 
+    def _row_text_with_padding(self, row: list[TerminalCell]) -> str:
+        return "".join(cell.char for cell in row if not cell.continuation)
+
     def _cursor_text_offset(self, row: list[TerminalCell], cursor_col: int) -> int:
         offset = 0
         for col, cell in enumerate(row[:cursor_col]):
@@ -329,6 +389,10 @@ class TerminalBuffer:
         if cell.width == 2 and col + 1 < self.cols:
             self._grid[row][col + 1] = TerminalCell()
         self._grid[row][col] = TerminalCell()
+
+    def _clear_row(self, row: int) -> None:
+        self._grid[row] = self._blank_line()
+        self._grid_wraps[row] = False
 
     def _char_width(self, char: str) -> int:
         if unicodedata.combining(char):
