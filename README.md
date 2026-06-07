@@ -165,7 +165,7 @@ The UI thread should only handle Qt rendering and user interaction. Shell IO, SS
 
 ### License
 
-Whose Shell is released under the MIT License. See [LICENSE](LICENSE) for details.
+Whose Shell is released under the Apache License 2.0. See [LICENSE](LICENSE) for details.
 
 ## 中文
 
@@ -330,4 +330,4 @@ UI 线程只负责 Qt 渲染和用户交互。Shell IO, SSH, SFTP, 文件扫描,
 
 ### 许可证
 
-Whose Shell 使用 MIT License 发布。详情见 [LICENSE](LICENSE)。
+Whose Shell 使用 Apache License 2.0 发布。详情见 [LICENSE](LICENSE)。

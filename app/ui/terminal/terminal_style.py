@@ -61,13 +61,37 @@ def style_with_foreground(style: TerminalStyle, foreground: QColor) -> TerminalS
     return replace(style, foreground=QColor(foreground))
 
 
+def ansi_256_color(index: int) -> QColor:
+    """把 xterm 256 色索引转换为 QColor."""
+    index = max(0, min(255, index))
+    if index < 8:
+        return QColor(ANSI_NORMAL_COLORS[index])
+    if index < 16:
+        return QColor(ANSI_BRIGHT_COLORS[index - 8])
+    if index < 232:
+        value = index - 16
+        red = value // 36
+        green = (value % 36) // 6
+        blue = value % 6
+        return QColor(_color_cube_channel(red), _color_cube_channel(green), _color_cube_channel(blue))
+    gray = 8 + (index - 232) * 10
+    return QColor(gray, gray, gray)
+
+
+def truecolor(red: int, green: int, blue: int) -> QColor:
+    """把 SGR truecolor 参数转换为 QColor."""
+    return QColor(_clamp_color(red), _clamp_color(green), _clamp_color(blue))
+
+
 def apply_sgr(style: TerminalStyle, params: list[int]) -> TerminalStyle:
-    """应用 Step 1 支持的 SGR 参数."""
+    """应用当前支持的 SGR 参数."""
     if not params:
         params = [0]
 
     next_style = style.copy()
-    for code in params:
+    index = 0
+    while index < len(params):
+        code = params[index]
         if code == 0:
             next_style = default_style()
         elif code == 1:
@@ -98,4 +122,37 @@ def apply_sgr(style: TerminalStyle, params: list[int]) -> TerminalStyle:
             next_style.foreground = QColor(ANSI_BRIGHT_COLORS[code - 90])
         elif 100 <= code <= 107:
             next_style.background = QColor(ANSI_BRIGHT_COLORS[code - 100])
+        elif code in {38, 48}:
+            color, consumed = _extended_color(params, index + 1)
+            if color is not None:
+                if code == 38:
+                    next_style.foreground = color
+                else:
+                    next_style.background = color
+            index += consumed
+        index += 1
     return next_style
+
+
+def _extended_color(params: list[int], start: int) -> tuple[QColor | None, int]:
+    if start >= len(params):
+        return None, 0
+
+    mode = params[start]
+    if mode == 5:
+        if start + 1 >= len(params):
+            return None, 1
+        return ansi_256_color(params[start + 1]), 2
+    if mode == 2:
+        if start + 3 >= len(params):
+            return None, 1
+        return truecolor(params[start + 1], params[start + 2], params[start + 3]), 4
+    return None, 1
+
+
+def _color_cube_channel(value: int) -> int:
+    return 0 if value == 0 else 55 + value * 40
+
+
+def _clamp_color(value: int) -> int:
+    return max(0, min(255, value))
