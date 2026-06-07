@@ -83,3 +83,14 @@ class ManagedTerminalSession:
 
     backend: object
     session: SessionRecord
+
+
+@dataclass(frozen=True)
+class SavedTerminalTab:
+    """退出应用时保存的终端标签页快照."""
+
+    connection_id: int
+    title: str
+    tab_order: int
+    is_current: bool
+    content: str

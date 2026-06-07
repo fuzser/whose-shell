@@ -49,6 +49,20 @@ def migrate(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_sessions_connection_id
             ON sessions(connection_id);
+
+        CREATE TABLE IF NOT EXISTS active_terminal_tabs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            connection_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            tab_order INTEGER NOT NULL,
+            is_current INTEGER NOT NULL DEFAULT 0,
+            content TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(connection_id) REFERENCES connections(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_active_terminal_tabs_order
+            ON active_terminal_tabs(tab_order);
         """
     )
     connection.commit()

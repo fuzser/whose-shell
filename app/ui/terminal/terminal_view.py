@@ -23,6 +23,7 @@ class TerminalView(QWidget):
         self.session_id = session_id
         self.connection_id = connection_id
         self.is_connected = True
+        self._archive_snapshot_on_next_connect = False
         self._terminal = TerminalWidget(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -41,31 +42,55 @@ class TerminalView(QWidget):
             self._show_disconnecting()
         self._backend.stop()
         self.is_connected = False
+        self._terminal.set_terminal_cursor_enabled(False)
         return was_connected
 
     def reconnect(self) -> None:
         self._show_connecting()
+        self._terminal.set_terminal_cursor_enabled(True)
         self._backend.start()
         self.is_connected = True
 
     def show_connecting(self) -> None:
         self._show_connecting()
 
+    def show_restored_disconnected(self) -> None:
+        self.is_connected = False
+        self._terminal.set_terminal_cursor_enabled(False)
+        self._show_disconnecting()
+
+    def content_snapshot(self) -> str:
+        return self._terminal.content_snapshot()
+
+    def restore_content_snapshot(self, content: str) -> None:
+        self._terminal.restore_content_snapshot(content)
+
+    def archive_snapshot_on_next_connect(self) -> None:
+        self._archive_snapshot_on_next_connect = True
+
     def _show_error(self, message: str) -> None:
         self._terminal.append_system_message(f"[error] {message}", self._ERROR_COLOR)
 
     def _handle_closed(self, exit_code: int) -> None:
         self.is_connected = False
+        self._terminal.set_terminal_cursor_enabled(False)
         self._terminal.append_system_message(f"[disconnected] Connection closed with exit code {exit_code}.", self._ERROR_COLOR)
         self.closed.emit(exit_code)
 
     def _show_connecting(self) -> None:
+        self._terminal.set_terminal_cursor_enabled(True)
         self._terminal.append_system_message("[connecting] Connecting...", self._INFO_COLOR)
 
     def _show_connected(self) -> None:
         self.is_connected = True
+        self._terminal.set_terminal_cursor_enabled(True)
+        if self._archive_snapshot_on_next_connect:
+            self._archive_snapshot_on_next_connect = False
+            self._terminal.archive_screen_to_scrollback()
+            return
         # 真实 PTY 会用绝对坐标重绘输入行, 连接提示不能留在同一个终端坐标空间里.
         self._terminal.clear_console()
 
     def _show_disconnecting(self) -> None:
+        self._terminal.set_terminal_cursor_enabled(False)
         self._terminal.append_system_message("[disconnecting] Disconnecting...", self._ERROR_COLOR)

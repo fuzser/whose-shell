@@ -26,6 +26,7 @@ class TerminalWidget(QAbstractScrollArea):
         self._selection_cursor: tuple[int, int] | None = None
         self._is_selecting = False
         self._scroll_offset = 0
+        self._cursor_enabled = True
         self._cursor_visible = True
         self._cursor_timer = QTimer(self)
         self._cursor_timer.setInterval(530)
@@ -62,6 +63,39 @@ class TerminalWidget(QAbstractScrollArea):
         self._reset_cursor_blink()
         self._sync_scrollbar()
         self.viewport().update()
+
+    def archive_screen_to_scrollback(self) -> None:
+        """把当前屏幕内容移入 scrollback."""
+        self._buffer.archive_screen_to_scrollback()
+        self._scroll_offset = 0
+        self._clear_selection()
+        self._sync_scrollbar()
+        self.viewport().update()
+
+    def content_snapshot(self) -> str:
+        """导出当前终端文本快照."""
+        lines = self._buffer.all_lines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return "\n".join(line.rstrip() for line in lines)
+
+    def restore_content_snapshot(self, content: str) -> None:
+        """恢复退出前保存的终端文本快照."""
+        self.clear_console()
+        if content:
+            self._buffer.write_text(content)
+        self._scroll_offset = 0
+        self._sync_scrollbar()
+        self.viewport().update()
+
+    def set_terminal_cursor_enabled(self, enabled: bool) -> None:
+        """控制终端输入光标是否可见."""
+        self._cursor_enabled = enabled
+        if enabled:
+            self._reset_cursor_blink()
+        else:
+            self._cursor_visible = False
+            self.viewport().update()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -160,7 +194,7 @@ class TerminalWidget(QAbstractScrollArea):
         self._paint_cursor(painter)
 
     def _paint_cursor(self, painter: QPainter) -> None:
-        if not self._cursor_visible or self._scroll_offset != 0:
+        if not self._cursor_enabled or not self._cursor_visible or self._scroll_offset != 0:
             return
         visible_start = self._buffer.visible_start_index(self._scroll_offset)
         x = self._buffer.cursor_col * self._cell_width
@@ -168,10 +202,17 @@ class TerminalWidget(QAbstractScrollArea):
         painter.fillRect(x, y, max(2, self._cell_width), self._cell_height, QColor("#eceff4"))
 
     def _blink_cursor(self) -> None:
+        if not self._cursor_enabled:
+            self._cursor_visible = False
+            self.viewport().update()
+            return
         self._cursor_visible = not self._cursor_visible
         self.viewport().update()
 
     def _reset_cursor_blink(self) -> None:
+        if not self._cursor_enabled:
+            self._cursor_visible = False
+            return
         self._cursor_visible = True
         self._cursor_timer.start()
 

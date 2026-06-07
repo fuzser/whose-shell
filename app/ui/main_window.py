@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QDockWidget, QMainWindow, QMenu, QMessageBox, QTabWidget
 
-from app.common.models import ConnectionType
+from app.common.models import ConnectionType, SavedTerminalTab
 from app.core.app_context import AppContext
 from app.ui.files.file_manager_dock import FileManagerDock
 from app.ui.history.history_dock import HistoryDock
@@ -42,7 +42,8 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._build_docks()
         self._wire_events()
-        self._new_local_terminal()
+        if not self._restore_active_tabs():
+            self._new_local_terminal()
 
     def _build_actions(self) -> None:
         new_terminal = QAction("New Local Shell", self)
@@ -137,7 +138,15 @@ class MainWindow(QMainWindow):
         self._context.session_manager.delete_ssh_connection(connection_id)
         self._refresh_sessions_panel()
 
-    def _add_terminal_tab(self, managed_session, title: str) -> None:
+    def _add_terminal_tab(
+        self,
+        managed_session,
+        title: str,
+        *,
+        start: bool = True,
+        content_snapshot: str = "",
+        archive_snapshot_on_connect: bool = False,
+    ) -> None:
         view = TerminalView(
             managed_session.backend,
             managed_session.session.id,
@@ -150,8 +159,16 @@ class MainWindow(QMainWindow):
         index = self._tabs.addTab(view, self._tab_title(title, connected=True))
         self._tabs.tabBar().setTabData(index, title)
         self._tabs.setCurrentIndex(index)
-        view.show_connecting()
-        managed_session.backend.start()
+        if content_snapshot:
+            view.restore_content_snapshot(content_snapshot)
+        if archive_snapshot_on_connect:
+            view.archive_snapshot_on_next_connect()
+        if start:
+            view.show_connecting()
+            managed_session.backend.start()
+        else:
+            view.show_restored_disconnected()
+            self._set_tab_connected(index, False)
 
     def _show_tab_menu(self, position) -> None:
         tab_index = self._tabs.tabBar().tabAt(position)
@@ -194,6 +211,56 @@ class MainWindow(QMainWindow):
     def _refresh_sessions_panel(self) -> None:
         if self._sessions_panel is not None:
             self._sessions_panel.refresh()
+
+    def _restore_active_tabs(self) -> bool:
+        saved_tabs = self._context.session_manager.list_active_tabs()
+        if not saved_tabs:
+            return False
+
+        current_index = 0
+        restored_count = 0
+        for saved_tab in saved_tabs:
+            try:
+                connection = self._context.session_manager.get_connection(saved_tab.connection_id)
+                managed_session = self._context.session_manager.create_terminal_from_connection(saved_tab.connection_id)
+            except Exception as exc:
+                self._context.event_bus.status_message.emit(f"Tab was not restored: {exc}")
+                continue
+            should_start = connection.connection_type == ConnectionType.LOCAL
+            self._add_terminal_tab(
+                managed_session,
+                saved_tab.title,
+                start=should_start,
+                content_snapshot=saved_tab.content,
+                archive_snapshot_on_connect=should_start and bool(saved_tab.content),
+            )
+            if saved_tab.is_current:
+                current_index = restored_count
+            restored_count += 1
+
+        if restored_count == 0:
+            return False
+        self._tabs.setCurrentIndex(min(current_index, self._tabs.count() - 1))
+        self._refresh_sessions_panel()
+        return True
+
+    def _save_active_tabs(self) -> None:
+        tabs: list[SavedTerminalTab] = []
+        for index in range(self._tabs.count()):
+            widget = self._tabs.widget(index)
+            if not isinstance(widget, TerminalView):
+                continue
+            title = self._tabs.tabBar().tabData(index) or self._plain_tab_title(self._tabs.tabText(index))
+            tabs.append(
+                SavedTerminalTab(
+                    connection_id=widget.connection_id,
+                    title=str(title),
+                    tab_order=index,
+                    is_current=index == self._tabs.currentIndex(),
+                    content=widget.content_snapshot(),
+                )
+            )
+        self._context.session_manager.save_active_tabs(tabs)
 
     def _rename_tabs_for_connection(self, connection_id: int, title: str) -> None:
         for index in range(self._tabs.count()):
@@ -253,6 +320,7 @@ class MainWindow(QMainWindow):
         widget = self._tabs.widget(index)
         if not isinstance(widget, TerminalView) or widget.is_connected:
             return
+        widget.archive_snapshot_on_next_connect()
         widget.reconnect()
         self._closed_session_ids.discard(widget.session_id)
         self._context.session_manager.reopen_session(widget.session_id)
@@ -292,6 +360,7 @@ class MainWindow(QMainWindow):
         return title
 
     def closeEvent(self, event) -> None:
+        self._save_active_tabs()
         for index in range(self._tabs.count()):
             widget = self._tabs.widget(index)
             if isinstance(widget, TerminalView):

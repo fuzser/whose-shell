@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import sqlite3
 
-from app.common.models import ConnectionRecord, ConnectionType, SessionRecord, SessionStatus, SshConnectionConfig
+from app.common.models import (
+    ConnectionRecord,
+    ConnectionType,
+    SavedTerminalTab,
+    SessionRecord,
+    SessionStatus,
+    SshConnectionConfig,
+)
 
 
 class ConnectionRepository:
@@ -243,6 +250,45 @@ class SessionRepository:
             (limit,),
         ).fetchall()
         return [self._row_to_session(row) for row in rows]
+
+    def save_active_tabs(self, tabs: list[SavedTerminalTab]) -> None:
+        """保存应用退出时仍打开的终端标签页."""
+        self._connection.execute("DELETE FROM active_terminal_tabs")
+        self._connection.executemany(
+            """
+            INSERT INTO active_terminal_tabs(connection_id, title, tab_order, is_current, content)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    tab.connection_id,
+                    tab.title,
+                    tab.tab_order,
+                    1 if tab.is_current else 0,
+                    tab.content,
+                )
+                for tab in tabs
+            ],
+        )
+        self._connection.commit()
+
+    def list_active_tabs(self) -> list[SavedTerminalTab]:
+        rows = self._connection.execute(
+            """
+            SELECT * FROM active_terminal_tabs
+            ORDER BY tab_order ASC, id ASC
+            """
+        ).fetchall()
+        return [
+            SavedTerminalTab(
+                connection_id=row["connection_id"],
+                title=row["title"],
+                tab_order=row["tab_order"],
+                is_current=bool(row["is_current"]),
+                content=row["content"],
+            )
+            for row in rows
+        ]
 
     def _trim_recent_sessions(self) -> None:
         """只保留最近 session 历史, 但不删除仍在运行的 session."""

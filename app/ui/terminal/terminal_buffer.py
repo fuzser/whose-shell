@@ -72,6 +72,19 @@ class TerminalBuffer:
     def clear_console(self) -> None:
         """清空当前 console 显示和本地 scrollback."""
         self._scrollback.clear()
+        self._scrollback_wraps.clear()
+        self.clear_screen()
+
+    def archive_screen_to_scrollback(self) -> None:
+        """把当前屏幕内容归档到 scrollback, 然后清空活动屏幕."""
+        last_content_index = self._last_content_line_index(self._grid, self._grid_wraps)
+        for row_index, row in enumerate(self._grid[: last_content_index + 1]):
+            if not self._row_text(row) and not self._grid_wraps[row_index]:
+                continue
+            self._scrollback.append([self._copy_cell(cell) for cell in row])
+            self._scrollback_wraps.append(self._grid_wraps[row_index])
+        self._scrollback = self._scrollback[-self.scrollback_limit :]
+        self._scrollback_wraps = self._scrollback_wraps[-self.scrollback_limit :]
         self.clear_screen()
 
     def clear_line(self, mode: int = 0) -> None:
@@ -322,3 +335,17 @@ class TerminalBuffer:
 
     def _blank_line(self) -> list[TerminalCell]:
         return [TerminalCell() for _ in range(self.cols)]
+
+    def _copy_cell(self, cell: TerminalCell) -> TerminalCell:
+        return TerminalCell(
+            char=cell.char,
+            foreground=QColor(cell.foreground),
+            background=QColor(cell.background),
+            bold=cell.bold,
+            italic=cell.italic,
+            underline=cell.underline,
+            inverse=cell.inverse,
+            dirty=cell.dirty,
+            width=cell.width,
+            continuation=cell.continuation,
+        )

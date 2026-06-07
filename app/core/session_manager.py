@@ -8,6 +8,7 @@ from app.common.models import (
     ConnectionRecord,
     ConnectionType,
     ManagedTerminalSession,
+    SavedTerminalTab,
     SessionRecord,
     SshConnectionConfig,
     TerminalSessionConfig,
@@ -84,6 +85,12 @@ class SessionManager(QObject):
 
     def list_recent_sessions(self, limit: int = 50) -> list[SessionRecord]:
         return self._sessions.list_recent_sessions(limit)
+
+    def save_active_tabs(self, tabs: list[SavedTerminalTab]) -> None:
+        self._sessions.save_active_tabs(tabs)
+
+    def list_active_tabs(self) -> list[SavedTerminalTab]:
+        return self._sessions.list_active_tabs()
 
     def get_connection(self, connection_id: int) -> ConnectionRecord:
         return self._connections.get_connection(connection_id)
