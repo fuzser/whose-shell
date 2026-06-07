@@ -56,6 +56,11 @@ class TerminalView(QWidget):
     def archive_screen_to_scrollback(self) -> None:
         self._terminal.archive_screen_to_scrollback()
 
+    def sync_backend_size(self) -> None:
+        """把当前可见终端尺寸同步给后端 PTY."""
+        if self._terminal.sync_terminal_size():
+            self._backend.resize(*self._terminal.terminal_size())
+
     def focus_terminal(self) -> None:
         self._terminal.setFocus(Qt.OtherFocusReason)
 

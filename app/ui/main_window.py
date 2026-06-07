@@ -173,10 +173,12 @@ class MainWindow(QMainWindow):
         index = self._tabs.addTab(view, self._tab_title(title, connected=True))
         self._tabs.tabBar().setTabData(index, title)
         self._tabs.setCurrentIndex(index)
+        view.sync_backend_size()
         if content_snapshot:
             view.restore_content_snapshot(content_snapshot)
         if start:
             view.show_connecting()
+            view.sync_backend_size()
             self._context.terminal_manager.start(managed_session.session.id)
         else:
             view.show_restored_disconnected()
@@ -333,8 +335,10 @@ class MainWindow(QMainWindow):
         widget = self._tabs.widget(index)
         if not isinstance(widget, TerminalView) or widget.is_connected:
             return
+        self._tabs.setCurrentIndex(index)
         widget.archive_screen_to_scrollback()
         widget.show_connecting()
+        widget.sync_backend_size()
         self._context.terminal_manager.reconnect(widget.session_id)
         self._refresh_sessions_panel()
 

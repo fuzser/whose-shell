@@ -111,6 +111,14 @@ class TerminalWidget(QAbstractScrollArea):
         super().resizeEvent(event)
         self._recalculate_grid()
 
+    def terminal_size(self) -> tuple[int, int]:
+        """返回当前终端网格尺寸."""
+        return self._buffer.cols, self._buffer.rows
+
+    def sync_terminal_size(self) -> bool:
+        """按真实 viewport 重新计算尺寸, 成功时返回 True."""
+        return self._recalculate_grid()
+
     def keyPressEvent(self, event) -> None:
         data = self._keymap.to_bytes(event)
         if data:
@@ -257,17 +265,24 @@ class TerminalWidget(QAbstractScrollArea):
         self._cursor_visible = True
         self._cursor_timer.start()
 
-    def _recalculate_grid(self) -> None:
+    def _recalculate_grid(self) -> bool:
         metrics = QFontMetrics(self._font)
         self._cell_width = max(1, metrics.horizontalAdvance("M"))
         self._cell_height = max(1, metrics.height())
-        cols = max(20, self.viewport().width() // self._cell_width)
-        rows = max(8, self.viewport().height() // self._cell_height)
+        viewport_width = self.viewport().width()
+        viewport_height = self.viewport().height()
+        has_usable_viewport = (
+            viewport_width >= self._cell_width * 20 and viewport_height >= self._cell_height * 8
+        )
+        cols = max(20, viewport_width // self._cell_width)
+        rows = max(8, viewport_height // self._cell_height)
         self._buffer.resize(cols, rows)
         self._scroll_offset = min(self._scroll_offset, self._buffer.max_scroll_offset())
         self._clamp_selection_to_grid()
         self._sync_scrollbar()
-        self.resized.emit(cols, rows)
+        if has_usable_viewport:
+            self.resized.emit(cols, rows)
+        return has_usable_viewport
 
     def _point_to_cell(self, point: QPoint) -> tuple[int, int]:
         col = max(0, min(self._buffer.cols - 1, point.x() // self._cell_width))
