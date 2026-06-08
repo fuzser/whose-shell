@@ -20,6 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 terminal-windows = ["pywinpty>=2.0"]
 dev = ["pytest>=8.0"]
+packaging = ["pyinstaller>=6.10"]
 
 [project.scripts]
 whose-shell = "app.main:main"

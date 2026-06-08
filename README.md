@@ -64,6 +64,22 @@ On Windows, install the terminal extra before opening local shell sessions:
 pip install -e ".[terminal-windows]"
 ```
 
+#### Release Artifact Builds
+
+GitHub Actions can build unsigned preview artifacts from tags or manual workflow runs:
+
+- `whose-shell-win-x64.exe`
+- `whose-shell-linux-amd64.tar.gz`
+- `whose-shell-macos-arm64.dmg`
+- `whose-shell-win-arm64.exe` is available as an experimental manual workflow option.
+
+Local PyInstaller builds use the same packaging entrypoint:
+
+```powershell
+python -m pip install -e ".[packaging,terminal-windows]"
+python packaging/pyinstaller_build.py --target win-x64
+```
+
 ### Technical Direction
 
 Whose Shell is planned as a Python desktop application built around:
@@ -228,6 +244,22 @@ Windows 下打开本地 shell 前, 先安装终端 extra：
 
 ```powershell
 pip install -e ".[terminal-windows]"
+```
+
+#### 发布构建产物
+
+GitHub Actions 可以在 tag 或手动 workflow 运行时生成未签名的预览构建产物：
+
+- `whose-shell-win-x64.exe`
+- `whose-shell-linux-amd64.tar.gz`
+- `whose-shell-macos-arm64.dmg`
+- `whose-shell-win-arm64.exe` 作为手动 workflow 的实验选项提供。
+
+本地 PyInstaller 构建使用同一个打包入口：
+
+```powershell
+python -m pip install -e ".[packaging,terminal-windows]"
+python packaging/pyinstaller_build.py --target win-x64
 ```
 
 ### 技术方向
