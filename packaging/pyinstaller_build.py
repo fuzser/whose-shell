@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import platform
 import shutil
@@ -71,8 +72,25 @@ def _run_pyinstaller(*, build_name: str, target: str) -> None:
     ]
     if not target.startswith("macos-"):
         command.append("--onefile")
+    if target.startswith("win-"):
+        for binary_path in _winpty_helper_binary_paths():
+            command.extend(["--add-binary", f"{binary_path}{os.pathsep}winpty"])
     command.append(str(APP_MODULE))
     _run(command)
+
+
+def _winpty_helper_binary_paths() -> list[Path]:
+    """返回 pywinpty 在 frozen exe 中需要的 helper binaries."""
+    spec = importlib.util.find_spec("winpty")
+    if spec is None or spec.origin is None:
+        raise RuntimeError("pywinpty is required for Windows artifact builds.")
+    winpty_dir = Path(spec.origin).parent
+    helpers = [winpty_dir / "OpenConsole.exe", winpty_dir / "winpty-agent.exe"]
+    missing = [path for path in helpers if not path.exists()]
+    if missing:
+        missing_text = ", ".join(str(path) for path in missing)
+        raise FileNotFoundError(f"Missing pywinpty helper binaries: {missing_text}")
+    return helpers
 
 
 def _package_artifact(*, target: str, build_name: str) -> Path:
