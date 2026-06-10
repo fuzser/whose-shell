@@ -21,8 +21,26 @@ class SecretStore:
         except keyring.errors.PasswordDeleteError:
             return
 
+    def set_connection_passphrase(self, connection_id: int, passphrase: str) -> None:
+        keyring = self._keyring()
+        keyring.set_password(self._service_name, self._passphrase_key(connection_id), passphrase)
+
+    def get_connection_passphrase(self, connection_id: int) -> str | None:
+        keyring = self._keyring()
+        return keyring.get_password(self._service_name, self._passphrase_key(connection_id))
+
+    def delete_connection_passphrase(self, connection_id: int) -> None:
+        keyring = self._keyring()
+        try:
+            keyring.delete_password(self._service_name, self._passphrase_key(connection_id))
+        except keyring.errors.PasswordDeleteError:
+            return
+
     def _password_key(self, connection_id: int) -> str:
         return f"connection:{connection_id}:password"
+
+    def _passphrase_key(self, connection_id: int) -> str:
+        return f"connection:{connection_id}:passphrase"
 
     def _keyring(self):
         try:

@@ -14,6 +14,12 @@ class SessionStatus(str, Enum):
     CLOSED = "closed"
 
 
+class ThemeMode(str, Enum):
+    SYSTEM = "system"
+    LIGHT = "light"
+    DARK = "dark"
+
+
 @dataclass(frozen=True)
 class TerminalSessionConfig:
     """终端会话配置."""
@@ -75,6 +81,45 @@ class SessionRecord:
     started_at: str | None = None
     ended_at: str | None = None
     exit_code: int | None = None
+
+
+@dataclass(frozen=True)
+class CommandRecord:
+    """已记录的单行命令历史."""
+
+    id: int
+    command_text: str
+    connection_type: ConnectionType
+    session_id: int | None = None
+    connection_id: int | None = None
+    host: str | None = None
+    cwd: str | None = None
+    started_at: str | None = None
+    exit_code: int | None = None
+    created_at: str | None = None
+
+
+@dataclass(frozen=True)
+class FavoriteCommand:
+    """收藏的命令文本."""
+
+    id: int
+    command_text: str
+    created_at: str | None = None
+    last_used_at: str | None = None
+
+
+@dataclass(frozen=True)
+class AppSettings:
+    """应用级持久化设置."""
+
+    terminal_cols: int = 100
+    terminal_rows: int = 32
+    terminal_font_family: str = ""
+    terminal_font_size: int = 12
+    default_local_shell: str = ""
+    restore_tabs_on_startup: bool = True
+    theme_mode: ThemeMode = ThemeMode.SYSTEM
 
 
 @dataclass(frozen=True)

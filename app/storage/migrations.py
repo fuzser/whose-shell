@@ -63,6 +63,49 @@ def migrate(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_active_terminal_tabs_order
             ON active_terminal_tabs(tab_order);
+
+        CREATE TABLE IF NOT EXISTS commands (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            command_text TEXT NOT NULL,
+            session_id INTEGER,
+            connection_id INTEGER,
+            connection_type TEXT NOT NULL,
+            host TEXT,
+            cwd TEXT,
+            started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            exit_code INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE SET NULL,
+            FOREIGN KEY(connection_id) REFERENCES connections(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_commands_started_at
+            ON commands(started_at DESC, id DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_commands_connection_id
+            ON commands(connection_id);
+
+        CREATE INDEX IF NOT EXISTS idx_commands_host
+            ON commands(host);
+
+        CREATE INDEX IF NOT EXISTS idx_commands_command_text
+            ON commands(command_text);
+
+        CREATE TABLE IF NOT EXISTS favorites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            command_text TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_used_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_favorites_last_used_at
+            ON favorites(last_used_at DESC, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
         """
     )
     connection.commit()

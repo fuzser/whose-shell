@@ -3,12 +3,16 @@ from __future__ import annotations
 import sqlite3
 
 from app.common.models import (
+    AppSettings,
+    CommandRecord,
     ConnectionRecord,
     ConnectionType,
+    FavoriteCommand,
     SavedTerminalTab,
     SessionRecord,
     SessionStatus,
     SshConnectionConfig,
+    ThemeMode,
 )
 
 
@@ -326,3 +330,292 @@ class SessionRepository:
             ended_at=row["ended_at"],
             exit_code=row["exit_code"],
         )
+
+
+class CommandRepository:
+    """读写命令历史记录."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def create_command(
+        self,
+        command_text: str,
+        connection_type: ConnectionType,
+        session_id: int | None = None,
+        connection_id: int | None = None,
+        host: str | None = None,
+        cwd: str | None = None,
+        started_at: str | None = None,
+        exit_code: int | None = None,
+    ) -> CommandRecord:
+        """保存一条已提交的单行命令."""
+        normalized_command = command_text.strip()
+        if not normalized_command:
+            raise ValueError("Command text cannot be empty.")
+        cursor = self._connection.execute(
+            """
+            INSERT INTO commands(
+                command_text, session_id, connection_id, connection_type,
+                host, cwd, started_at, exit_code
+            )
+            VALUES(?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?)
+            """,
+            (
+                normalized_command,
+                session_id,
+                connection_id,
+                connection_type.value,
+                host,
+                cwd,
+                started_at,
+                exit_code,
+            ),
+        )
+        self._connection.commit()
+        return self.get_command(cursor.lastrowid)
+
+    def get_command(self, command_id: int) -> CommandRecord:
+        row = self._connection.execute("SELECT * FROM commands WHERE id = ?", (command_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"Command not found: {command_id}")
+        return self._row_to_command(row)
+
+    def list_commands(
+        self,
+        limit: int = 100,
+        search_text: str | None = None,
+        connection_id: int | None = None,
+        host: str | None = None,
+        connection_type: ConnectionType | None = None,
+    ) -> list[CommandRecord]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if search_text:
+            clauses.append("command_text LIKE ?")
+            params.append(f"%{search_text}%")
+        if connection_id is not None:
+            clauses.append("connection_id = ?")
+            params.append(connection_id)
+        if host:
+            clauses.append("host = ?")
+            params.append(host)
+        if connection_type is not None:
+            clauses.append("connection_type = ?")
+            params.append(connection_type.value)
+
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        rows = self._connection.execute(
+            f"""
+            SELECT * FROM commands
+            {where_sql}
+            ORDER BY started_at DESC, id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [self._row_to_command(row) for row in rows]
+
+    def update_exit_code(self, command_id: int, exit_code: int | None) -> CommandRecord:
+        self._connection.execute(
+            "UPDATE commands SET exit_code = ? WHERE id = ?",
+            (exit_code, command_id),
+        )
+        self._connection.commit()
+        return self.get_command(command_id)
+
+    def _row_to_command(self, row: sqlite3.Row) -> CommandRecord:
+        return CommandRecord(
+            id=row["id"],
+            command_text=row["command_text"],
+            session_id=row["session_id"],
+            connection_id=row["connection_id"],
+            connection_type=ConnectionType(row["connection_type"]),
+            host=row["host"],
+            cwd=row["cwd"],
+            started_at=row["started_at"],
+            exit_code=row["exit_code"],
+            created_at=row["created_at"],
+        )
+
+
+class FavoriteRepository:
+    """读写收藏命令."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def add_favorite(self, command_text: str) -> FavoriteCommand:
+        normalized_command = command_text.strip()
+        if not normalized_command:
+            raise ValueError("Command text cannot be empty.")
+        self._connection.execute(
+            """
+            INSERT INTO favorites(command_text, last_used_at)
+            VALUES(?, CURRENT_TIMESTAMP)
+            ON CONFLICT(command_text) DO UPDATE SET last_used_at = CURRENT_TIMESTAMP
+            """,
+            (normalized_command,),
+        )
+        self._connection.commit()
+        return self.get_favorite(normalized_command)
+
+    def remove_favorite(self, command_text: str) -> None:
+        self._connection.execute(
+            "DELETE FROM favorites WHERE command_text = ?",
+            (command_text.strip(),),
+        )
+        self._connection.commit()
+
+    def get_favorite(self, command_text: str) -> FavoriteCommand:
+        row = self._connection.execute(
+            "SELECT * FROM favorites WHERE command_text = ?",
+            (command_text.strip(),),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Favorite command not found: {command_text}")
+        return self._row_to_favorite(row)
+
+    def is_favorite(self, command_text: str) -> bool:
+        row = self._connection.execute(
+            "SELECT 1 FROM favorites WHERE command_text = ?",
+            (command_text.strip(),),
+        ).fetchone()
+        return row is not None
+
+    def list_favorites(self, limit: int = 100) -> list[FavoriteCommand]:
+        rows = self._connection.execute(
+            """
+            SELECT * FROM favorites
+            ORDER BY
+                CASE WHEN last_used_at IS NULL THEN 1 ELSE 0 END,
+                last_used_at DESC,
+                created_at DESC,
+                id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [self._row_to_favorite(row) for row in rows]
+
+    def _row_to_favorite(self, row: sqlite3.Row) -> FavoriteCommand:
+        return FavoriteCommand(
+            id=row["id"],
+            command_text=row["command_text"],
+            created_at=row["created_at"],
+            last_used_at=row["last_used_at"],
+        )
+
+
+class SettingsRepository:
+    """读写应用设置."""
+
+    _DEFAULTS = AppSettings()
+
+    _KEYS = {
+        "terminal_cols": "terminal.default_cols",
+        "terminal_rows": "terminal.default_rows",
+        "terminal_font_family": "terminal.font_family",
+        "terminal_font_size": "terminal.font_size",
+        "default_local_shell": "terminal.default_local_shell",
+        "restore_tabs_on_startup": "startup.restore_tabs",
+        "theme_mode": "appearance.theme_mode",
+    }
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def get_settings(self) -> AppSettings:
+        values = self._read_values()
+        return AppSettings(
+            terminal_cols=self._read_int(values, "terminal_cols", self._DEFAULTS.terminal_cols),
+            terminal_rows=self._read_int(values, "terminal_rows", self._DEFAULTS.terminal_rows),
+            terminal_font_family=values.get(
+                self._KEYS["terminal_font_family"],
+                self._DEFAULTS.terminal_font_family,
+            ),
+            terminal_font_size=self._read_int(
+                values,
+                "terminal_font_size",
+                self._DEFAULTS.terminal_font_size,
+            ),
+            default_local_shell=values.get(
+                self._KEYS["default_local_shell"],
+                self._DEFAULTS.default_local_shell,
+            ),
+            restore_tabs_on_startup=self._read_bool(
+                values,
+                "restore_tabs_on_startup",
+                self._DEFAULTS.restore_tabs_on_startup,
+            ),
+            theme_mode=self._read_theme_mode(values),
+        )
+
+    def save_settings(self, settings: AppSettings) -> AppSettings:
+        pairs = {
+            self._KEYS["terminal_cols"]: str(settings.terminal_cols),
+            self._KEYS["terminal_rows"]: str(settings.terminal_rows),
+            self._KEYS["terminal_font_family"]: settings.terminal_font_family,
+            self._KEYS["terminal_font_size"]: str(settings.terminal_font_size),
+            self._KEYS["default_local_shell"]: settings.default_local_shell,
+            self._KEYS["restore_tabs_on_startup"]: "true" if settings.restore_tabs_on_startup else "false",
+            self._KEYS["theme_mode"]: settings.theme_mode.value,
+        }
+        self._connection.executemany(
+            """
+            INSERT INTO settings(key, value)
+            VALUES(?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            pairs.items(),
+        )
+        self._connection.commit()
+        return self.get_settings()
+
+    def set_value(self, key: str, value: str) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO settings(key, value)
+            VALUES(?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (key, value),
+        )
+        self._connection.commit()
+
+    def get_value(self, key: str, default: str | None = None) -> str | None:
+        row = self._connection.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            return default
+        return row["value"]
+
+    def _read_values(self) -> dict[str, str]:
+        rows = self._connection.execute("SELECT key, value FROM settings").fetchall()
+        return {row["key"]: row["value"] for row in rows}
+
+    def _read_int(self, values: dict[str, str], field: str, default: int) -> int:
+        value = values.get(self._KEYS[field])
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except ValueError:
+            return default
+
+    def _read_bool(self, values: dict[str, str], field: str, default: bool) -> bool:
+        value = values.get(self._KEYS[field])
+        if value is None:
+            return default
+        return value.lower() in {"1", "true", "yes", "on"}
+
+    def _read_theme_mode(self, values: dict[str, str]) -> ThemeMode:
+        value = values.get(self._KEYS["theme_mode"], self._DEFAULTS.theme_mode.value)
+        try:
+            return ThemeMode(value)
+        except ValueError:
+            return self._DEFAULTS.theme_mode
