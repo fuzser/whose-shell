@@ -4,6 +4,7 @@ from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QMouseEvent, QPainter, QPaintEvent, QWheelEvent
 from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QMenu
 
+from app.common.models import DEFAULT_TERMINAL_FONT_FAMILY, resolve_terminal_font_family
 from app.ui.terminal.ansi_parser import AnsiParser
 from app.ui.terminal.keymap import KeyMapper
 from app.ui.terminal.terminal_buffer import TerminalBuffer
@@ -23,7 +24,7 @@ class TerminalWidget(QAbstractScrollArea):
         self._buffer = TerminalBuffer()
         self._parser = AnsiParser()
         self._keymap = KeyMapper()
-        self._font = QFont("Cascadia Mono", 11)
+        self._font = QFont(DEFAULT_TERMINAL_FONT_FAMILY, 11)
         self._font.setStyleHint(QFont.Monospace)
         self._selection_anchor: tuple[int, int] | None = None
         self._selection_cursor: tuple[int, int] | None = None
@@ -125,6 +126,14 @@ class TerminalWidget(QAbstractScrollArea):
     def sync_terminal_size(self) -> bool:
         """按真实 viewport 重新计算尺寸, 成功时返回 True."""
         return self._recalculate_grid()
+
+    def set_terminal_font(self, family: str, point_size: int) -> None:
+        """应用终端字体设置并重新计算网格."""
+        font = QFont(resolve_terminal_font_family(family), max(1, point_size))
+        font.setStyleHint(QFont.Monospace)
+        self._font = font
+        self._recalculate_grid()
+        self.viewport().update()
 
     def keyPressEvent(self, event) -> None:
         data = self._keymap.to_bytes(event)

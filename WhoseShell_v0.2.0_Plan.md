@@ -115,7 +115,7 @@ Required work:
   - default terminal rows
   - terminal font family
   - terminal font size
-  - default local shell preference
+  - default local shell preference, with automatic system detection as the default
   - restore tabs on startup
   - theme mode: `system`, `light`, or `dark`
 
@@ -124,6 +124,8 @@ Expected behavior:
 - Settings persist after restart.
 - Font changes apply to open terminals when practical.
 - Default terminal size applies before new backends start.
+- Default local shell preference automatically reads system information and adapts to the best available shell.
+- Manual shell preference overrides are validated and fall back safely when unavailable.
 - Restore-tabs setting controls whether active tabs are saved and restored.
 - Settings that require restart should say so clearly.
 
@@ -218,7 +220,7 @@ Files that should not be modified unless specifically needed:
 
 v0.2.0 should be delivered in five controlled phases. Each phase should leave the application runnable and should have its own verification gate before moving on.
 
-### Phase 1: Data Foundation
+### Phase 1: Data Foundation [done]
 
 Goal:
 
@@ -251,7 +253,7 @@ Acceptance gate:
 - SSH passphrase helper tests prove secrets are not stored in SQLite.
 - `compileall` and focused repository tests pass.
 
-### Phase 2: Basic Settings
+### Phase 2: Basic Settings [done]
 
 Goal:
 
@@ -260,7 +262,15 @@ Goal:
 Primary scope:
 
 - Build the first real Settings panel.
-- Add controls for terminal columns, terminal rows, font family, font size, default local shell, restore tabs on startup, and theme mode.
+- Add controls for terminal columns, terminal rows, font family, font size, default local shell mode, restore tabs on startup, and theme mode.
+- Treat default local shell preference as a Phase 2 fix, not just a setting field:
+  - use `auto` as the default setting value;
+  - read the current platform, environment variables, and available executable paths before creating a local terminal;
+  - on Windows, automatically prefer available shells in this order: `pwsh.exe`, `powershell.exe`, `cmd.exe`;
+  - on Linux and macOS, automatically prefer the detected `$SHELL`, then `/bin/sh`;
+  - show the resolved automatic shell in the Settings UI so the user can see what will be used;
+  - allow a manual override only from shells available on the current system;
+  - if a saved manual shell is no longer available, show a clear status message, reset to `auto`, and fall back to the detected platform default.
 - Wire settings into new terminal creation.
 - Respect the restore-tabs setting during startup and shutdown.
 - Apply font settings to open terminals when practical.
@@ -279,11 +289,14 @@ Acceptance gate:
 
 - Settings can be changed from the UI and survive restart.
 - New local and SSH terminals use the configured default size and font.
+- New local terminals automatically use the best detected shell when shell mode is `auto`.
+- New local terminals use the manual shell override only when that shell is available on the current system.
+- Invalid or unavailable saved shell preferences do not break terminal startup, reset to `auto`, and fall back visibly.
 - Restore tabs can be enabled and disabled.
 - Existing terminal behavior is not regressed.
 - Focus behavior remains correct: text caret appears only in editable controls and the terminal.
 
-### Phase 3: Command History and Favorites
+### Phase 3: Command History and Favorites [todo]
 
 Goal:
 
@@ -320,7 +333,7 @@ Acceptance gate:
 - Empty commands and prompt-editing artifacts are not recorded as useful commands.
 - Complex shell-specific parsing remains out of scope and is documented as a known limitation.
 
-### Phase 4: SSH Completion and Error Feedback
+### Phase 4: SSH Completion and Error Feedback [todo]
 
 Goal:
 
@@ -357,7 +370,7 @@ Acceptance gate:
 - Default remote directory success and failure are visible.
 - Existing SSH restore and reconnect content preservation still work.
 
-### Phase 5: Stabilization, Documentation, and Release Readiness
+### Phase 5: Stabilization, Documentation, and Release Readiness [todo]
 
 Goal:
 
@@ -411,6 +424,7 @@ Focused test areas:
 - Secret store saves and deletes SSH passphrases through keyring helpers.
 - History re-run sends the expected command text to the active terminal.
 - Restore-tabs setting changes startup restore behavior.
+- Default local shell preference detects the platform default shell automatically, supports valid manual overrides, resets unavailable overrides to `auto`, and does not break local terminal startup.
 
 Manual checks:
 

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PySide6.QtCore import QObject
 
 from app.backends.local_backend_factory import create_local_backend
 from app.backends.ssh_backend import SshTerminalBackend
 from app.common.models import (
+    AppSettings,
     ConnectionRecord,
     ConnectionType,
     ManagedTerminalSession,
@@ -13,8 +16,9 @@ from app.common.models import (
     SshConnectionConfig,
     TerminalSessionConfig,
 )
+from app.common.platform import AUTO_LOCAL_SHELL, resolve_local_shell_preference
 from app.common.signals import EventBus
-from app.storage.repositories import ConnectionRepository, SessionRepository
+from app.storage.repositories import ConnectionRepository, SessionRepository, SettingsRepository
 from app.storage.secrets import SecretStore
 
 
@@ -26,18 +30,24 @@ class SessionManager(QObject):
         event_bus: EventBus,
         connection_repository: ConnectionRepository,
         session_repository: SessionRepository,
+        settings_repository: SettingsRepository,
         secret_store: SecretStore,
     ) -> None:
         super().__init__()
         self._event_bus = event_bus
         self._connections = connection_repository
         self._sessions = session_repository
+        self._settings = settings_repository
         self._secrets = secret_store
 
     def create_local_terminal(self) -> ManagedTerminalSession:
+        settings = self.get_settings()
         config = TerminalSessionConfig(
             name="Local Shell",
             connection_type=ConnectionType.LOCAL,
+            command=self._local_shell_command(settings),
+            cols=settings.terminal_cols,
+            rows=settings.terminal_rows,
         )
         connection = self._connections.ensure_local_connection()
         session = self._sessions.create_session(connection, "Local Shell", config.cwd)
@@ -47,6 +57,8 @@ class SessionManager(QObject):
 
     def create_ssh_terminal(self, config: SshConnectionConfig) -> ManagedTerminalSession:
         """创建 SSH 终端后端."""
+        settings = self.get_settings()
+        config = replace(config, cols=settings.terminal_cols, rows=settings.terminal_rows)
         connection = self._connections.save_ssh_connection(config)
         if config.password:
             try:
@@ -92,6 +104,14 @@ class SessionManager(QObject):
     def list_active_tabs(self) -> list[SavedTerminalTab]:
         return self._sessions.list_active_tabs()
 
+    def get_settings(self) -> AppSettings:
+        return self._settings.get_settings()
+
+    def save_settings(self, settings: AppSettings) -> AppSettings:
+        saved = self._settings.save_settings(settings)
+        self._event_bus.status_message.emit("Settings saved.")
+        return saved
+
     def get_connection(self, connection_id: int) -> ConnectionRecord:
         return self._connections.get_connection(connection_id)
 
@@ -132,9 +152,19 @@ class SessionManager(QObject):
             password=password,
             private_key_path=connection.private_key_path,
             default_directory=connection.default_directory,
+            cols=self.get_settings().terminal_cols,
+            rows=self.get_settings().terminal_rows,
         )
         title = connection.name
         session = self._sessions.create_session(connection, title, connection.default_directory)
         backend = SshTerminalBackend(config)
         self._event_bus.status_message.emit(f"SSH session #{session.id} opened from saved connection.")
         return ManagedTerminalSession(backend=backend, session=session)
+
+    def _local_shell_command(self, settings: AppSettings) -> list[str]:
+        resolution = resolve_local_shell_preference(settings.default_local_shell)
+        if resolution.used_fallback and settings.default_local_shell != AUTO_LOCAL_SHELL:
+            self._settings.save_settings(replace(settings, default_local_shell=AUTO_LOCAL_SHELL))
+        if resolution.fallback_message:
+            self._event_bus.status_message.emit(resolution.fallback_message)
+        return resolution.command

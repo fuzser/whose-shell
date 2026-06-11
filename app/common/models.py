@@ -20,6 +20,14 @@ class ThemeMode(str, Enum):
     DARK = "dark"
 
 
+DEFAULT_TERMINAL_FONT_FAMILY = "Cascadia Code"
+
+
+def resolve_terminal_font_family(family: str | None) -> str:
+    """解析终端字体设置, 空值表示使用默认字体."""
+    return family or DEFAULT_TERMINAL_FONT_FAMILY
+
+
 @dataclass(frozen=True)
 class TerminalSessionConfig:
     """终端会话配置."""

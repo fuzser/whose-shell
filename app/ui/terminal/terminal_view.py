@@ -61,6 +61,11 @@ class TerminalView(QWidget):
         if self._terminal.sync_terminal_size():
             self._backend.resize(*self._terminal.terminal_size())
 
+    def apply_font_settings(self, family: str, point_size: int) -> None:
+        """应用终端字体设置并同步后端尺寸."""
+        self._terminal.set_terminal_font(family, point_size)
+        self.sync_backend_size()
+
     def focus_terminal(self) -> None:
         self._terminal.setFocus(Qt.OtherFocusReason)
 

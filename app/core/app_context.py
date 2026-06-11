@@ -6,7 +6,7 @@ from app.common.signals import EventBus
 from app.core.session_manager import SessionManager
 from app.core.terminal_manager import TerminalManager
 from app.storage.db import Database
-from app.storage.repositories import ConnectionRepository, SessionRepository
+from app.storage.repositories import ConnectionRepository, SessionRepository, SettingsRepository
 from app.storage.secrets import SecretStore
 
 
@@ -18,6 +18,7 @@ class AppContext:
     database: Database
     session_manager: SessionManager
     terminal_manager: TerminalManager
+    settings_repository: SettingsRepository
 
     @classmethod
     def create_default(cls) -> "AppContext":
@@ -25,11 +26,13 @@ class AppContext:
         database = Database()
         connection_repository = ConnectionRepository(database.connection)
         session_repository = SessionRepository(database.connection)
+        settings_repository = SettingsRepository(database.connection)
         secret_store = SecretStore()
         session_manager = SessionManager(
             event_bus,
             connection_repository,
             session_repository,
+            settings_repository,
             secret_store,
         )
         terminal_manager = TerminalManager(session_manager)
@@ -38,4 +41,5 @@ class AppContext:
             database=database,
             session_manager=session_manager,
             terminal_manager=terminal_manager,
+            settings_repository=settings_repository,
         )

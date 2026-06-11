@@ -21,6 +21,7 @@ from app.core.app_context import AppContext
 from app.ui.files.file_manager_dock import FileManagerDock
 from app.ui.history.history_dock import HistoryDock
 from app.ui.monitor.monitor_dock import MonitorDock
+from app.ui.settings.settings_panel import SettingsPanel
 from app.ui.sessions.ssh_connection_dialog import SshConnectionDialog
 from app.ui.sessions.sessions_dock import SessionsDock
 from app.ui.terminal.terminal_view import TerminalView
@@ -45,6 +46,8 @@ class MainWindow(QMainWindow):
         self._tabs.tabBar().customContextMenuRequested.connect(self._show_tab_menu)
         self._sessions_dock_widget: QDockWidget | None = None
         self._sessions_panel: SessionsDock | None = None
+        self._settings_dock_widget: QDockWidget | None = None
+        self._settings_panel: SettingsPanel | None = None
         self._closing_views: dict[int, TerminalView] = {}
         self._is_closing = False
 
@@ -68,6 +71,9 @@ class MainWindow(QMainWindow):
         show_sessions = QAction("Sessions", self)
         show_sessions.triggered.connect(self._show_sessions_dock)
 
+        show_settings = QAction("Settings", self)
+        show_settings.triggered.connect(self._show_settings_dock)
+
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
 
@@ -79,6 +85,7 @@ class MainWindow(QMainWindow):
 
         view_menu = self.menuBar().addMenu("View")
         view_menu.addAction(show_sessions)
+        view_menu.addAction(show_settings)
 
     def _build_docks(self) -> None:
         sessions = SessionsDock(self._context.session_manager, self)
@@ -93,9 +100,15 @@ class MainWindow(QMainWindow):
         history = HistoryDock(self)
         files = FileManagerDock(self)
         monitor = MonitorDock(self)
+        settings = SettingsPanel(self._context.session_manager, self)
+        settings.settings_saved.connect(self._handle_settings_saved)
+        self._settings_panel = settings
+        self._settings_dock_widget = self._dock("Settings", settings)
 
         self.addDockWidget(Qt.LeftDockWidgetArea, self._sessions_dock_widget)
         self.addDockWidget(Qt.LeftDockWidgetArea, self._dock("History", history))
+        self.addDockWidget(Qt.RightDockWidgetArea, self._settings_dock_widget)
+        self._settings_dock_widget.hide()
         self.addDockWidget(Qt.BottomDockWidgetArea, self._dock("File Manager", files))
         self.addDockWidget(Qt.BottomDockWidgetArea, self._dock("Monitor", monitor))
 
@@ -173,6 +186,8 @@ class MainWindow(QMainWindow):
         index = self._tabs.addTab(view, self._tab_title(title, connected=True))
         self._tabs.tabBar().setTabData(index, title)
         self._tabs.setCurrentIndex(index)
+        settings = self._context.session_manager.get_settings()
+        view.apply_font_settings(settings.terminal_font_family, settings.terminal_font_size)
         view.sync_backend_size()
         if content_snapshot:
             view.restore_content_snapshot(content_snapshot)
@@ -224,6 +239,21 @@ class MainWindow(QMainWindow):
         self._sessions_dock_widget.raise_()
         self._refresh_sessions_panel()
 
+    def _show_settings_dock(self) -> None:
+        if self._settings_dock_widget is None:
+            return
+        if self.dockWidgetArea(self._settings_dock_widget) == Qt.NoDockWidgetArea:
+            self.addDockWidget(Qt.RightDockWidgetArea, self._settings_dock_widget)
+        self._settings_dock_widget.show()
+        self._settings_dock_widget.raise_()
+
+    def _handle_settings_saved(self, settings) -> None:
+        for index in range(self._tabs.count()):
+            widget = self._tabs.widget(index)
+            if isinstance(widget, TerminalView):
+                widget.apply_font_settings(settings.terminal_font_family, settings.terminal_font_size)
+        self._focus_current_terminal_later(force=True)
+
     def _refresh_sessions_panel(self) -> None:
         if self._is_closing:
             return
@@ -231,6 +261,8 @@ class MainWindow(QMainWindow):
             self._sessions_panel.refresh()
 
     def _restore_active_tabs(self) -> bool:
+        if not self._context.session_manager.get_settings().restore_tabs_on_startup:
+            return False
         saved_tabs = self._context.session_manager.list_active_tabs()
         if not saved_tabs:
             return False
@@ -263,6 +295,9 @@ class MainWindow(QMainWindow):
         return True
 
     def _save_active_tabs(self) -> None:
+        if not self._context.session_manager.get_settings().restore_tabs_on_startup:
+            self._context.session_manager.save_active_tabs([])
+            return
         tabs: list[SavedTerminalTab] = []
         for index in range(self._tabs.count()):
             widget = self._tabs.widget(index)
