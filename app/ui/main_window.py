@@ -46,6 +46,8 @@ class MainWindow(QMainWindow):
         self._tabs.tabBar().customContextMenuRequested.connect(self._show_tab_menu)
         self._sessions_dock_widget: QDockWidget | None = None
         self._sessions_panel: SessionsDock | None = None
+        self._history_dock_widget: QDockWidget | None = None
+        self._history_panel: HistoryDock | None = None
         self._settings_dock_widget: QDockWidget | None = None
         self._settings_panel: SettingsPanel | None = None
         self._closing_views: dict[int, TerminalView] = {}
@@ -71,6 +73,9 @@ class MainWindow(QMainWindow):
         show_sessions = QAction("Sessions", self)
         show_sessions.triggered.connect(self._show_sessions_dock)
 
+        show_history = QAction("History", self)
+        show_history.triggered.connect(self._show_history_dock)
+
         show_settings = QAction("Settings", self)
         show_settings.triggered.connect(self._show_settings_dock)
 
@@ -85,6 +90,7 @@ class MainWindow(QMainWindow):
 
         view_menu = self.menuBar().addMenu("View")
         view_menu.addAction(show_sessions)
+        view_menu.addAction(show_history)
         view_menu.addAction(show_settings)
 
     def _build_docks(self) -> None:
@@ -97,7 +103,10 @@ class MainWindow(QMainWindow):
         self._sessions_panel = sessions
         self._sessions_dock_widget = self._dock("Sessions", sessions)
 
-        history = HistoryDock(self)
+        history = HistoryDock(self._context.session_manager, self)
+        history.rerun_requested.connect(self._rerun_history_command)
+        self._history_panel = history
+        self._history_dock_widget = self._dock("History", history)
         files = FileManagerDock(self)
         monitor = MonitorDock(self)
         settings = SettingsPanel(self._context.session_manager, self)
@@ -106,7 +115,7 @@ class MainWindow(QMainWindow):
         self._settings_dock_widget = self._dock("Settings", settings)
 
         self.addDockWidget(Qt.LeftDockWidgetArea, self._sessions_dock_widget)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self._dock("History", history))
+        self.addDockWidget(Qt.LeftDockWidgetArea, self._history_dock_widget)
         self.addDockWidget(Qt.RightDockWidgetArea, self._settings_dock_widget)
         self._settings_dock_widget.hide()
         self.addDockWidget(Qt.BottomDockWidgetArea, self._dock("File Manager", files))
@@ -183,6 +192,7 @@ class MainWindow(QMainWindow):
             managed_session.session.connection_id,
             self,
         )
+        view.command_submitted.connect(self._record_submitted_command)
         index = self._tabs.addTab(view, self._tab_title(title, connected=True))
         self._tabs.tabBar().setTabData(index, title)
         self._tabs.setCurrentIndex(index)
@@ -239,6 +249,15 @@ class MainWindow(QMainWindow):
         self._sessions_dock_widget.raise_()
         self._refresh_sessions_panel()
 
+    def _show_history_dock(self) -> None:
+        if self._history_dock_widget is None:
+            return
+        if self.dockWidgetArea(self._history_dock_widget) == Qt.NoDockWidgetArea:
+            self.addDockWidget(Qt.LeftDockWidgetArea, self._history_dock_widget)
+        self._history_dock_widget.show()
+        self._history_dock_widget.raise_()
+        self._refresh_history_panel()
+
     def _show_settings_dock(self) -> None:
         if self._settings_dock_widget is None:
             return
@@ -259,6 +278,28 @@ class MainWindow(QMainWindow):
             return
         if self._sessions_panel is not None:
             self._sessions_panel.refresh()
+
+    def _refresh_history_panel(self) -> None:
+        if self._is_closing:
+            return
+        if self._history_panel is not None:
+            self._history_panel.refresh()
+
+    def _record_submitted_command(self, session_id: int, command_text: str) -> None:
+        command = self._context.session_manager.record_command(session_id, command_text)
+        if command is not None:
+            self._refresh_history_panel()
+
+    def _rerun_history_command(self, command_text: str) -> None:
+        widget = self._tabs.currentWidget()
+        if not isinstance(widget, TerminalView):
+            self.statusBar().showMessage("No active terminal for command history re-run.")
+            return
+        if not widget.is_connected:
+            self.statusBar().showMessage("Active terminal is disconnected.")
+            return
+        widget.send_command(command_text)
+        self._focus_current_terminal_later(force=True)
 
     def _restore_active_tabs(self) -> bool:
         if not self._context.session_manager.get_settings().restore_tabs_on_startup:

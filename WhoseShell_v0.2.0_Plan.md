@@ -31,9 +31,9 @@ Already available:
 
 Known gaps for v0.2.0:
 
-- Command history panel is still a placeholder.
-- Settings panel is still a placeholder.
-- SQLite schema does not yet include commands, favorites, settings, or file transfer metadata.
+- Command history panel now supports single-line command capture, search, filtering, favorites, and re-run actions.
+- Settings panel now persists terminal defaults and restore behavior.
+- SQLite schema now includes commands, favorites, and settings.
 - SSH private-key passphrase handling is not as complete as password handling.
 - SSH connection and reconnect errors need clearer user-visible feedback.
 - Monitor and SFTP panels are intentionally incomplete.
@@ -296,7 +296,7 @@ Acceptance gate:
 - Existing terminal behavior is not regressed.
 - Focus behavior remains correct: text caret appears only in editable controls and the terminal.
 
-### Phase 3: Command History and Favorites [todo]
+### Phase 3: Command History and Favorites [done]
 
 Goal:
 

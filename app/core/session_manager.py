@@ -8,8 +8,10 @@ from app.backends.local_backend_factory import create_local_backend
 from app.backends.ssh_backend import SshTerminalBackend
 from app.common.models import (
     AppSettings,
+    CommandRecord,
     ConnectionRecord,
     ConnectionType,
+    FavoriteCommand,
     ManagedTerminalSession,
     SavedTerminalTab,
     SessionRecord,
@@ -18,7 +20,13 @@ from app.common.models import (
 )
 from app.common.platform import AUTO_LOCAL_SHELL, resolve_local_shell_preference
 from app.common.signals import EventBus
-from app.storage.repositories import ConnectionRepository, SessionRepository, SettingsRepository
+from app.storage.repositories import (
+    CommandRepository,
+    ConnectionRepository,
+    FavoriteRepository,
+    SessionRepository,
+    SettingsRepository,
+)
 from app.storage.secrets import SecretStore
 
 
@@ -30,6 +38,8 @@ class SessionManager(QObject):
         event_bus: EventBus,
         connection_repository: ConnectionRepository,
         session_repository: SessionRepository,
+        command_repository: CommandRepository,
+        favorite_repository: FavoriteRepository,
         settings_repository: SettingsRepository,
         secret_store: SecretStore,
     ) -> None:
@@ -37,6 +47,8 @@ class SessionManager(QObject):
         self._event_bus = event_bus
         self._connections = connection_repository
         self._sessions = session_repository
+        self._commands = command_repository
+        self._favorites = favorite_repository
         self._settings = settings_repository
         self._secrets = secret_store
 
@@ -97,6 +109,50 @@ class SessionManager(QObject):
 
     def list_recent_sessions(self, limit: int = 50) -> list[SessionRecord]:
         return self._sessions.list_recent_sessions(limit)
+
+    def record_command(self, session_id: int, command_text: str) -> CommandRecord | None:
+        """记录终端提交的单行命令."""
+        try:
+            session = self._sessions.get_session(session_id)
+            return self._commands.create_command(
+                command_text,
+                session.connection_type,
+                session_id=session.id,
+                connection_id=session.connection_id,
+                host=session.host,
+                cwd=session.cwd,
+            )
+        except ValueError:
+            return None
+
+    def list_commands(
+        self,
+        limit: int = 200,
+        search_text: str | None = None,
+        host: str | None = None,
+        connection_type: ConnectionType | None = None,
+    ) -> list[CommandRecord]:
+        return self._commands.list_commands(
+            limit=limit,
+            search_text=search_text,
+            host=host,
+            connection_type=connection_type,
+        )
+
+    def list_favorites(self, limit: int = 200) -> list[FavoriteCommand]:
+        return self._favorites.list_favorites(limit)
+
+    def add_favorite(self, command_text: str) -> FavoriteCommand:
+        favorite = self._favorites.add_favorite(command_text)
+        self._event_bus.status_message.emit(f"Favorite command saved: {favorite.command_text}")
+        return favorite
+
+    def remove_favorite(self, command_text: str) -> None:
+        self._favorites.remove_favorite(command_text)
+        self._event_bus.status_message.emit(f"Favorite command removed: {command_text.strip()}")
+
+    def is_favorite(self, command_text: str) -> bool:
+        return self._favorites.is_favorite(command_text)
 
     def save_active_tabs(self, tabs: list[SavedTerminalTab]) -> None:
         self._sessions.save_active_tabs(tabs)

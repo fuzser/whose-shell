@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from app.backends.terminal_base import TerminalBackend
+from app.core.command_capture import CommandInputCapture
 from app.ui.terminal.terminal_widget import TerminalWidget
 
 
 class TerminalView(QWidget):
     """终端视图, 连接 UI 控件和后端."""
+
+    command_submitted = Signal(int, str)
 
     _INFO_COLOR = QColor("#88c0d0")
     _SUCCESS_COLOR = QColor("#a3be8c")
@@ -21,6 +24,7 @@ class TerminalView(QWidget):
         self.session_id = session_id
         self.connection_id = connection_id
         self.is_connected = True
+        self._command_capture = CommandInputCapture()
         self._terminal = TerminalWidget(self)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocusProxy(self._terminal)
@@ -28,7 +32,7 @@ class TerminalView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._terminal)
 
-        self._terminal.input_requested.connect(self._backend.write)
+        self._terminal.input_requested.connect(self._handle_input_requested)
         self._terminal.resized.connect(self._backend.resize)
         self._backend.output_received.connect(self._terminal.append_output)
         self._backend.connected.connect(self._show_connected)
@@ -68,6 +72,18 @@ class TerminalView(QWidget):
 
     def focus_terminal(self) -> None:
         self._terminal.setFocus(Qt.OtherFocusReason)
+
+    def send_command(self, command_text: str) -> None:
+        """向当前终端重新发送一条历史命令."""
+        command = command_text.strip()
+        if not command or not self.is_connected:
+            return
+        self._handle_input_requested(f"{command}\r".encode("utf-8"))
+
+    def _handle_input_requested(self, data: bytes) -> None:
+        for command in self._command_capture.feed(data):
+            self.command_submitted.emit(self.session_id, command)
+        self._backend.write(data)
 
     def _show_error(self, message: str) -> None:
         self._terminal.append_system_message(f"[error] {message}", self._ERROR_COLOR)

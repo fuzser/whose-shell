@@ -13,7 +13,13 @@ from app.common.signals import EventBus
 from app.core import session_manager as session_manager_module
 from app.core.session_manager import SessionManager
 from app.storage.migrations import migrate
-from app.storage.repositories import ConnectionRepository, SessionRepository, SettingsRepository
+from app.storage.repositories import (
+    CommandRepository,
+    ConnectionRepository,
+    FavoriteRepository,
+    SessionRepository,
+    SettingsRepository,
+)
 from app.storage.secrets import SecretStore
 
 
@@ -34,6 +40,8 @@ def _session_manager(connection: sqlite3.Connection) -> SessionManager:
         EventBus(),
         ConnectionRepository(connection),
         SessionRepository(connection),
+        CommandRepository(connection),
+        FavoriteRepository(connection),
         SettingsRepository(connection),
         SecretStore(),
     )
