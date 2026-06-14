@@ -51,8 +51,10 @@ class SshConnectionConfig:
     port: int
     username: str
     name: str | None = None
+    auth_method: str | None = None
     password: str | None = None
     private_key_path: str | None = None
+    private_key_passphrase: str | None = None
     default_directory: str | None = None
     cols: int = 100
     rows: int = 32

@@ -162,6 +162,8 @@ class ConnectionRepository:
         self._connection.commit()
 
     def _auth_method(self, config: SshConnectionConfig) -> str:
+        if config.auth_method in {"password", "private_key", "none"}:
+            return config.auth_method
         if config.private_key_path:
             return "private_key"
         if config.password:

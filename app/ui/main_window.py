@@ -129,6 +129,7 @@ class MainWindow(QMainWindow):
 
     def _wire_events(self) -> None:
         self._context.event_bus.status_message.connect(self.statusBar().showMessage)
+        self._context.terminal_manager.status_message.connect(self.statusBar().showMessage)
         self._context.terminal_manager.state_changed.connect(self._handle_terminal_state_changed)
         self._context.terminal_manager.closed.connect(self._handle_terminal_manager_closed)
 
@@ -159,6 +160,7 @@ class MainWindow(QMainWindow):
             self._focus_current_terminal_later(force=True)
             return
         updated = self._context.session_manager.update_ssh_connection(connection_id, dialog.connection_config())
+        self._context.terminal_manager.refresh_ssh_connection_config(connection_id)
         self._rename_tabs_for_connection(connection_id, updated.name)
         self._refresh_sessions_panel()
         self._focus_current_terminal_later(force=True)

@@ -40,6 +40,10 @@ class SshTerminalBackend(TerminalBackend):
             return
         self._worker.request_stop()
 
+    def reconfigure(self, config: SshConnectionConfig) -> None:
+        """更新下一次 SSH 启动使用的连接配置."""
+        self._config = config
+
     def _handle_worker_closed(self, exit_code: int) -> None:
         self._worker = None
         self.closed.emit(exit_code)
@@ -113,21 +117,8 @@ class SshTerminalWorker(QThread):
             self._write_queue.put_nowait(data)
         self._pending_input.clear()
 
-        connect_kwargs: dict[str, Any] = {
-            "host": self._config.host,
-            "port": self._config.port,
-            "username": self._config.username,
-        }
-        if self._config.password:
-            connect_kwargs["password"] = self._config.password
-        if self._config.private_key_path:
-            connect_kwargs["client_keys"] = [self._config.private_key_path]
-        if self._config.accept_unknown_host:
-            # 最小版本允许跳过 known_hosts 校验, 便于连接新主机. 后续应加入主机指纹确认 UI.
-            connect_kwargs["known_hosts"] = None
-
         try:
-            self._connection = await asyncssh.connect(**connect_kwargs)
+            self._connection = await asyncssh.connect(**self._connect_kwargs())
             self._process = await self._connection.create_process(
                 term_type="xterm-256color",
                 term_size=(self._cols, self._rows),
@@ -135,7 +126,7 @@ class SshTerminalWorker(QThread):
             )
             self.connected.emit()
             if self._config.default_directory:
-                await self._write_to_process(f"cd {self._quote_shell_path(self._config.default_directory)}\r".encode())
+                await self._enter_default_directory(self._config.default_directory)
 
             reader = asyncio.create_task(self._read_output())
             writer = asyncio.create_task(self._write_input())
@@ -152,7 +143,7 @@ class SshTerminalWorker(QThread):
         except asyncio.CancelledError:
             self.closed.emit(0)
         except Exception as exc:
-            self.error.emit(f"SSH error: {exc}")
+            self.error.emit(self._format_ssh_error(exc, asyncssh))
             self.closed.emit(1)
         finally:
             await self._close_connection()
@@ -180,6 +171,9 @@ class SshTerminalWorker(QThread):
         drain = getattr(self._process.stdin, "drain", None)
         if drain is not None:
             await drain()
+
+    async def _enter_default_directory(self, path: str) -> None:
+        await self._write_to_process(f"cd {self._quote_shell_path(path)}\r".encode())
 
     async def _wait_for_exit(self) -> int:
         if self._process is None:
@@ -217,3 +211,29 @@ class SshTerminalWorker(QThread):
     def _quote_shell_path(self, path: str) -> str:
         """为 cd 命令做最小 shell 单引号转义."""
         return "'" + path.replace("'", "'\"'\"'") + "'"
+
+    def _connect_kwargs(self) -> dict[str, Any]:
+        connect_kwargs: dict[str, Any] = {
+            "host": self._config.host,
+            "port": self._config.port,
+            "username": self._config.username,
+        }
+        if self._config.password:
+            connect_kwargs["password"] = self._config.password
+        if self._config.private_key_path:
+            connect_kwargs["client_keys"] = [self._config.private_key_path]
+        if self._config.private_key_passphrase:
+            connect_kwargs["passphrase"] = self._config.private_key_passphrase
+        if self._config.accept_unknown_host:
+            # 最小版本允许跳过 known_hosts 校验, 便于连接新主机. 后续应加入主机指纹确认 UI.
+            connect_kwargs["known_hosts"] = None
+        return connect_kwargs
+
+    def _format_ssh_error(self, exc: Exception, asyncssh_module: Any) -> str:
+        if isinstance(exc, getattr(asyncssh_module, "PermissionDenied", ())):
+            return "SSH authentication failed. Check the username, password, private key, or key passphrase."
+        if isinstance(exc, getattr(asyncssh_module, "KeyImportError", ())):
+            return f"SSH private key could not be loaded: {exc}"
+        if isinstance(exc, OSError):
+            return f"SSH connection failed. Check the host, port, and network: {exc}"
+        return f"SSH connection failed: {exc}"

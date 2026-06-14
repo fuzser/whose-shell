@@ -333,7 +333,7 @@ Acceptance gate:
 - Empty commands and prompt-editing artifacts are not recorded as useful commands.
 - Complex shell-specific parsing remains out of scope and is documented as a known limitation.
 
-### Phase 4: SSH Completion and Error Feedback [todo]
+### Phase 4: SSH Completion and Error Feedback [done]
 
 Goal:
 

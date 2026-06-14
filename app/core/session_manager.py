@@ -77,6 +77,11 @@ class SessionManager(QObject):
                 self._secrets.set_connection_password(connection.id, config.password)
             except Exception as exc:
                 self._event_bus.status_message.emit(f"SSH password was not saved: {exc}")
+        if config.private_key_passphrase:
+            try:
+                self._secrets.set_connection_passphrase(connection.id, config.private_key_passphrase)
+            except Exception as exc:
+                self._event_bus.status_message.emit(f"SSH private key passphrase was not saved: {exc}")
         title = connection.name
         session = self._sessions.create_session(connection, title, config.default_directory)
         backend = SshTerminalBackend(config)
@@ -178,8 +183,17 @@ class SessionManager(QObject):
                 self._secrets.set_connection_password(connection.id, config.password)
             except Exception as exc:
                 self._event_bus.status_message.emit(f"SSH password was not saved: {exc}")
+        if config.private_key_passphrase:
+            try:
+                self._secrets.set_connection_passphrase(connection.id, config.private_key_passphrase)
+            except Exception as exc:
+                self._event_bus.status_message.emit(f"SSH private key passphrase was not saved: {exc}")
         self._event_bus.status_message.emit(f"SSH connection updated: {connection.name}.")
         return connection
+
+    def ssh_config_from_connection(self, connection_id: int) -> SshConnectionConfig:
+        connection = self._connections.get_connection(connection_id)
+        return self._ssh_config_from_connection(connection)
 
     def delete_ssh_connection(self, connection_id: int) -> None:
         connection = self._connections.get_connection(connection_id)
@@ -190,9 +204,21 @@ class SessionManager(QObject):
             self._secrets.delete_connection_password(connection_id)
         except Exception as exc:
             self._event_bus.status_message.emit(f"SSH password was not deleted: {exc}")
+        try:
+            self._secrets.delete_connection_passphrase(connection_id)
+        except Exception as exc:
+            self._event_bus.status_message.emit(f"SSH private key passphrase was not deleted: {exc}")
         self._event_bus.status_message.emit(f"SSH connection deleted: {connection.name}.")
 
     def _create_ssh_terminal_from_record(self, connection: ConnectionRecord) -> ManagedTerminalSession:
+        config = self._ssh_config_from_connection(connection)
+        title = connection.name
+        session = self._sessions.create_session(connection, title, connection.default_directory)
+        backend = SshTerminalBackend(config)
+        self._event_bus.status_message.emit(f"SSH session #{session.id} opened from saved connection.")
+        return ManagedTerminalSession(backend=backend, session=session)
+
+    def _ssh_config_from_connection(self, connection: ConnectionRecord) -> SshConnectionConfig:
         if not connection.host or not connection.port or not connection.username:
             raise ValueError(f"SSH connection is incomplete: {connection.id}")
         try:
@@ -200,22 +226,25 @@ class SessionManager(QObject):
         except Exception as exc:
             password = None
             self._event_bus.status_message.emit(f"SSH password was not loaded: {exc}")
+        try:
+            passphrase = self._secrets.get_connection_passphrase(connection.id)
+        except Exception as exc:
+            passphrase = None
+            self._event_bus.status_message.emit(f"SSH private key passphrase was not loaded: {exc}")
         config = SshConnectionConfig(
             host=connection.host,
             port=connection.port,
             username=connection.username,
             name=connection.name,
+            auth_method=connection.auth_method,
             password=password,
             private_key_path=connection.private_key_path,
+            private_key_passphrase=passphrase,
             default_directory=connection.default_directory,
             cols=self.get_settings().terminal_cols,
             rows=self.get_settings().terminal_rows,
         )
-        title = connection.name
-        session = self._sessions.create_session(connection, title, connection.default_directory)
-        backend = SshTerminalBackend(config)
-        self._event_bus.status_message.emit(f"SSH session #{session.id} opened from saved connection.")
-        return ManagedTerminalSession(backend=backend, session=session)
+        return config
 
     def _local_shell_command(self, settings: AppSettings) -> list[str]:
         resolution = resolve_local_shell_preference(settings.default_local_shell)
