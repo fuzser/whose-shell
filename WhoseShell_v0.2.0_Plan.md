@@ -29,13 +29,13 @@ Already available:
 - Linux and macOS POSIX PTY local shell support.
 - GitHub Actions artifact builds for Windows x64, Linux amd64, and macOS arm64.
 
-Known gaps for v0.2.0:
+Completed v0.2.0 scope:
 
 - Command history panel now supports single-line command capture, search, filtering, favorites, and re-run actions.
 - Settings panel now persists terminal defaults and restore behavior.
 - SQLite schema now includes commands, favorites, and settings.
-- SSH private-key passphrase handling is not as complete as password handling.
-- SSH connection and reconnect errors need clearer user-visible feedback.
+- SSH private-key passphrase handling now uses keyring, matching password storage behavior.
+- SSH connection, authentication, disconnect, reconnect, and default-directory feedback are now visible to users.
 - Monitor and SFTP panels are intentionally incomplete.
 
 ## 3. In Scope
@@ -370,7 +370,7 @@ Acceptance gate:
 - Default remote directory success and failure are visible.
 - Existing SSH restore and reconnect content preservation still work.
 
-### Phase 5: Stabilization, Documentation, and Release Readiness [todo]
+### Phase 5: Stabilization, Documentation, and Release Readiness [done]
 
 Goal:
 
