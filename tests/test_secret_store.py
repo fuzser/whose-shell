@@ -60,6 +60,14 @@ def test_secret_store_passphrase_helpers_do_not_write_to_sqlite(monkeypatch) -> 
 
     SecretStore().set_connection_passphrase(3, "private-passphrase")
 
-    for table in ("connections", "sessions", "active_terminal_tabs", "commands", "favorites", "settings"):
+    for table in (
+        "connections",
+        "sessions",
+        "active_terminal_tabs",
+        "commands",
+        "favorites",
+        "settings",
+        "file_transfers",
+    ):
         rows = connection.execute(f"SELECT * FROM {table}").fetchall()
         assert "private-passphrase" not in str([tuple(row) for row in rows])

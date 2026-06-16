@@ -4,12 +4,21 @@ import sqlite3
 
 import pytest
 
-from app.common.models import AppSettings, ConnectionType, ThemeMode
+from app.common.models import (
+    AppSettings,
+    ConflictPolicy,
+    ConnectionType,
+    SshConnectionConfig,
+    ThemeMode,
+    TransferDirection,
+    TransferStatus,
+)
 from app.storage.migrations import migrate
 from app.storage.repositories import (
     CommandRepository,
     ConnectionRepository,
     FavoriteRepository,
+    FileTransferRepository,
     SessionRepository,
     SettingsRepository,
 )
@@ -36,6 +45,20 @@ def test_migrate_creates_phase_one_tables_idempotently() -> None:
         """
     ).fetchall()
     assert {row["name"] for row in rows} == {"commands", "favorites", "settings"}
+
+
+def test_migrate_creates_file_transfers_table_idempotently() -> None:
+    connection = _connection()
+
+    migrate(connection)
+
+    row = connection.execute(
+        """
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name = 'file_transfers'
+        """
+    ).fetchone()
+    assert row["name"] == "file_transfers"
 
 
 def test_migrate_preserves_existing_connection_and_session_rows() -> None:
@@ -168,3 +191,64 @@ def test_settings_repository_falls_back_when_stored_values_are_invalid() -> None
     loaded = settings.get_settings()
     assert loaded.terminal_cols == AppSettings().terminal_cols
     assert loaded.theme_mode == ThemeMode.SYSTEM
+
+
+def test_file_transfer_repository_tracks_status_progress_and_errors() -> None:
+    connection = _connection()
+    transfers = FileTransferRepository(connection)
+
+    queued = transfers.create_transfer(
+        TransferDirection.UPLOAD,
+        "C:/local/report.txt",
+        "/tmp/report.txt",
+        conflict_policy=ConflictPolicy.RENAME,
+        host="example.test",
+        total_bytes=512,
+    )
+
+    assert queued.direction == TransferDirection.UPLOAD
+    assert queued.status == TransferStatus.QUEUED
+    assert queued.conflict_policy == ConflictPolicy.RENAME
+    assert queued.bytes_transferred == 0
+    assert queued.total_bytes == 512
+
+    running = transfers.mark_running(queued.id)
+    assert running.status == TransferStatus.RUNNING
+    assert running.started_at is not None
+
+    progressed = transfers.update_progress(queued.id, 128)
+    assert progressed.bytes_transferred == 128
+
+    failed = transfers.fail_transfer(queued.id, "Permission denied")
+    assert failed.status == TransferStatus.FAILED
+    assert failed.error_message == "Permission denied"
+    assert failed.finished_at is not None
+
+
+def test_file_transfer_repository_keeps_snapshot_after_connection_delete() -> None:
+    connection = _connection()
+    connections = ConnectionRepository(connection)
+    transfers = FileTransferRepository(connection)
+    ssh_connection = connections.save_ssh_connection(
+        SshConnectionConfig(
+            name="Demo SSH",
+            host="example.test",
+            port=22,
+            username="demo",
+            auth_method="none",
+        )
+    )
+    transfer = transfers.create_transfer(
+        TransferDirection.DOWNLOAD,
+        "/remote/file.txt",
+        "C:/local/file.txt",
+        connection_id=ssh_connection.id,
+        host=ssh_connection.host,
+    )
+
+    connections.delete_ssh_connection(ssh_connection.id)
+
+    preserved = transfers.get_transfer(transfer.id)
+    assert preserved.connection_id is None
+    assert preserved.host == "example.test"
+    assert preserved.source_path == "/remote/file.txt"

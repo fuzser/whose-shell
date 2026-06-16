@@ -7,12 +7,16 @@ from app.common.models import (
     CommandRecord,
     ConnectionRecord,
     ConnectionType,
+    ConflictPolicy,
     FavoriteCommand,
+    FileTransferRecord,
     SavedTerminalTab,
     SessionRecord,
     SessionStatus,
     SshConnectionConfig,
     ThemeMode,
+    TransferDirection,
+    TransferStatus,
 )
 
 
@@ -507,6 +511,199 @@ class FavoriteRepository:
             command_text=row["command_text"],
             created_at=row["created_at"],
             last_used_at=row["last_used_at"],
+        )
+
+
+class FileTransferRepository:
+    """读写文件传输队列元数据."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def create_transfer(
+        self,
+        direction: TransferDirection,
+        source_path: str,
+        target_path: str,
+        conflict_policy: ConflictPolicy = ConflictPolicy.SKIP,
+        connection_id: int | None = None,
+        host: str | None = None,
+        total_bytes: int | None = None,
+    ) -> FileTransferRecord:
+        """创建一条排队中的传输记录."""
+        normalized_source = source_path.strip()
+        normalized_target = target_path.strip()
+        if not normalized_source:
+            raise ValueError("Source path cannot be empty.")
+        if not normalized_target:
+            raise ValueError("Target path cannot be empty.")
+        if total_bytes is not None and total_bytes < 0:
+            raise ValueError("Total bytes cannot be negative.")
+
+        cursor = self._connection.execute(
+            """
+            INSERT INTO file_transfers(
+                direction, status, source_path, target_path, connection_id, host,
+                total_bytes, conflict_policy
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                direction.value,
+                TransferStatus.QUEUED.value,
+                normalized_source,
+                normalized_target,
+                connection_id,
+                host,
+                total_bytes,
+                conflict_policy.value,
+            ),
+        )
+        self._connection.commit()
+        return self.get_transfer(cursor.lastrowid)
+
+    def get_transfer(self, transfer_id: int) -> FileTransferRecord:
+        row = self._connection.execute(
+            "SELECT * FROM file_transfers WHERE id = ?",
+            (transfer_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"File transfer not found: {transfer_id}")
+        return self._row_to_transfer(row)
+
+    def list_transfers(
+        self,
+        limit: int = 100,
+        status: TransferStatus | None = None,
+        connection_id: int | None = None,
+    ) -> list[FileTransferRecord]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status.value)
+        if connection_id is not None:
+            clauses.append("connection_id = ?")
+            params.append(connection_id)
+
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        rows = self._connection.execute(
+            f"""
+            SELECT * FROM file_transfers
+            {where_sql}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [self._row_to_transfer(row) for row in rows]
+
+    def mark_running(self, transfer_id: int) -> FileTransferRecord:
+        self._connection.execute(
+            """
+            UPDATE file_transfers
+            SET status = ?,
+                started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+                error_message = NULL
+            WHERE id = ?
+            """,
+            (TransferStatus.RUNNING.value, transfer_id),
+        )
+        self._connection.commit()
+        return self.get_transfer(transfer_id)
+
+    def update_progress(
+        self,
+        transfer_id: int,
+        bytes_transferred: int,
+        total_bytes: int | None = None,
+    ) -> FileTransferRecord:
+        if bytes_transferred < 0:
+            raise ValueError("Bytes transferred cannot be negative.")
+        if total_bytes is not None and total_bytes < 0:
+            raise ValueError("Total bytes cannot be negative.")
+        self._connection.execute(
+            """
+            UPDATE file_transfers
+            SET bytes_transferred = ?,
+                total_bytes = COALESCE(?, total_bytes)
+            WHERE id = ?
+            """,
+            (bytes_transferred, total_bytes, transfer_id),
+        )
+        self._connection.commit()
+        return self.get_transfer(transfer_id)
+
+    def complete_transfer(
+        self,
+        transfer_id: int,
+        bytes_transferred: int | None = None,
+    ) -> FileTransferRecord:
+        current = self.get_transfer(transfer_id)
+        final_bytes = current.bytes_transferred if bytes_transferred is None else bytes_transferred
+        if final_bytes < 0:
+            raise ValueError("Bytes transferred cannot be negative.")
+        self._connection.execute(
+            """
+            UPDATE file_transfers
+            SET status = ?,
+                bytes_transferred = ?,
+                error_message = NULL,
+                finished_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (TransferStatus.COMPLETED.value, final_bytes, transfer_id),
+        )
+        self._connection.commit()
+        return self.get_transfer(transfer_id)
+
+    def fail_transfer(self, transfer_id: int, error_message: str) -> FileTransferRecord:
+        message = error_message.strip()
+        if not message:
+            raise ValueError("Error message cannot be empty.")
+        self._connection.execute(
+            """
+            UPDATE file_transfers
+            SET status = ?,
+                error_message = ?,
+                finished_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (TransferStatus.FAILED.value, message, transfer_id),
+        )
+        self._connection.commit()
+        return self.get_transfer(transfer_id)
+
+    def cancel_transfer(self, transfer_id: int) -> FileTransferRecord:
+        self._connection.execute(
+            """
+            UPDATE file_transfers
+            SET status = ?,
+                finished_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (TransferStatus.CANCELED.value, transfer_id),
+        )
+        self._connection.commit()
+        return self.get_transfer(transfer_id)
+
+    def _row_to_transfer(self, row: sqlite3.Row) -> FileTransferRecord:
+        return FileTransferRecord(
+            id=row["id"],
+            direction=TransferDirection(row["direction"]),
+            status=TransferStatus(row["status"]),
+            source_path=row["source_path"],
+            target_path=row["target_path"],
+            connection_id=row["connection_id"],
+            host=row["host"],
+            bytes_transferred=row["bytes_transferred"],
+            total_bytes=row["total_bytes"],
+            conflict_policy=ConflictPolicy(row["conflict_policy"]),
+            error_message=row["error_message"],
+            created_at=row["created_at"],
+            started_at=row["started_at"],
+            finished_at=row["finished_at"],
         )
 
 

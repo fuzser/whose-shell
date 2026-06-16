@@ -20,6 +20,32 @@ class ThemeMode(str, Enum):
     DARK = "dark"
 
 
+class FileEntryType(str, Enum):
+    FILE = "file"
+    DIRECTORY = "directory"
+    SYMLINK = "symlink"
+    OTHER = "other"
+
+
+class TransferDirection(str, Enum):
+    UPLOAD = "upload"
+    DOWNLOAD = "download"
+
+
+class TransferStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
+class ConflictPolicy(str, Enum):
+    SKIP = "skip"
+    OVERWRITE = "overwrite"
+    RENAME = "rename"
+
+
 DEFAULT_TERMINAL_FONT_FAMILY = "Cascadia Code"
 
 
@@ -117,6 +143,39 @@ class FavoriteCommand:
     command_text: str
     created_at: str | None = None
     last_used_at: str | None = None
+
+
+@dataclass(frozen=True)
+class FileEntry:
+    """文件管理器展示的本地或远程文件条目."""
+
+    path: str
+    name: str
+    entry_type: FileEntryType
+    size: int | None = None
+    modified_at: str | None = None
+    permissions: str | None = None
+    is_hidden: bool = False
+
+
+@dataclass(frozen=True)
+class FileTransferRecord:
+    """文件传输队列中的持久化元数据."""
+
+    id: int
+    direction: TransferDirection
+    status: TransferStatus
+    source_path: str
+    target_path: str
+    conflict_policy: ConflictPolicy
+    connection_id: int | None = None
+    host: str | None = None
+    bytes_transferred: int = 0
+    total_bytes: int | None = None
+    error_message: str | None = None
+    created_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 @dataclass(frozen=True)

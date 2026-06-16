@@ -106,6 +106,33 @@ def migrate(connection: sqlite3.Connection) -> None:
             value TEXT NOT NULL,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS file_transfers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            direction TEXT NOT NULL,
+            status TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            target_path TEXT NOT NULL,
+            connection_id INTEGER,
+            host TEXT,
+            bytes_transferred INTEGER NOT NULL DEFAULT 0,
+            total_bytes INTEGER,
+            conflict_policy TEXT NOT NULL,
+            error_message TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            started_at TEXT,
+            finished_at TEXT,
+            FOREIGN KEY(connection_id) REFERENCES connections(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_file_transfers_created_at
+            ON file_transfers(created_at DESC, id DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_file_transfers_status
+            ON file_transfers(status);
+
+        CREATE INDEX IF NOT EXISTS idx_file_transfers_connection_id
+            ON file_transfers(connection_id);
         """
     )
     connection.commit()
