@@ -277,7 +277,7 @@ Acceptance gate:
 - Local filesystem helper tests cover valid paths, invalid paths, and permission-style failures where practical.
 - `compileall` and focused service/storage tests pass.
 
-### Phase 2: Local File Panel [todo]
+### Phase 2: Local File Panel [done]
 
 Goal:
 

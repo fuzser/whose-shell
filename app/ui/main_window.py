@@ -108,6 +108,7 @@ class MainWindow(QMainWindow):
         self._history_panel = history
         self._history_dock_widget = self._dock("History", history)
         files = FileManagerDock(self)
+        files.status_message.connect(self.statusBar().showMessage)
         monitor = MonitorDock(self)
         settings = SettingsPanel(self._context.session_manager, self)
         settings.settings_saved.connect(self._handle_settings_saved)

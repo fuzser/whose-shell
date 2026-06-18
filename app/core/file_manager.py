@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -48,6 +49,60 @@ class FileManager:
         """检查本地目标路径是否已存在, 供冲突策略使用."""
         return self._normalize_path(path).exists()
 
+    def create_local_directory(self, parent_path: str | Path, name: str) -> FileEntry:
+        """在本地目录下创建新文件夹."""
+        parent = self._require_local_directory(parent_path)
+        directory_name = self._validate_local_name(name, "Directory name")
+        target = parent / directory_name
+        if target.exists():
+            raise FileExistsError(f"Local path already exists: {target}")
+        target.mkdir()
+        return self._entry_from_path(target)
+
+    def create_local_file(self, parent_path: str | Path, name: str) -> FileEntry:
+        """在本地目录下创建空文件."""
+        parent = self._require_local_directory(parent_path)
+        file_name = self._validate_local_name(name, "File name")
+        target = parent / file_name
+        if target.exists():
+            raise FileExistsError(f"Local path already exists: {target}")
+        target.touch()
+        return self._entry_from_path(target)
+
+    def rename_local_path(self, path: str | Path, new_name: str) -> FileEntry:
+        """重命名本地文件或目录, 不允许跨目录移动."""
+        source = self._require_existing_local_path(path)
+        target_name = self._validate_local_name(new_name, "New name")
+        target = source.with_name(target_name)
+        if target == source:
+            return self._entry_from_path(source)
+        if target.exists():
+            raise FileExistsError(f"Local path already exists: {target}")
+        source.rename(target)
+        return self._entry_from_path(target)
+
+    def delete_local_path(self, path: str | Path) -> None:
+        """删除本地文件或目录, UI 必须先完成用户确认."""
+        target = self._require_existing_local_path(path)
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+            return
+        target.unlink()
+
+    def copy_local_path(self, source_path: str | Path, target_directory: str | Path) -> FileEntry:
+        """复制本地文件或目录到目标目录, 不静默覆盖已有目标."""
+        source = self._require_existing_local_path(source_path)
+        target_parent = self._require_local_directory(target_directory)
+        target = target_parent / source.name
+        if target.exists():
+            raise FileExistsError(f"Local path already exists: {target}")
+        if source.is_dir() and not source.is_symlink():
+            self._reject_copy_into_self(source, target_parent)
+            shutil.copytree(source, target)
+        else:
+            shutil.copy2(source, target)
+        return self._entry_from_path(target)
+
     def create_transfer_record(
         self,
         direction: TransferDirection,
@@ -76,6 +131,33 @@ class FileManager:
             return Path(path).expanduser().resolve(strict=False)
         except RuntimeError as exc:
             raise ValueError(f"Invalid local path: {path}") from exc
+
+    def _require_existing_local_path(self, path: str | Path) -> Path:
+        local_path = self._normalize_path(path)
+        if not local_path.exists():
+            raise FileNotFoundError(f"Local path does not exist: {local_path}")
+        return local_path
+
+    def _require_local_directory(self, path: str | Path) -> Path:
+        local_path = self._require_existing_local_path(path)
+        if not local_path.is_dir():
+            raise NotADirectoryError(f"Local path is not a directory: {local_path}")
+        return local_path
+
+    def _validate_local_name(self, name: str, label: str) -> str:
+        value = name.strip()
+        if not value:
+            raise ValueError(f"{label} cannot be empty.")
+        if value in {".", ".."} or "/" in value or "\\" in value:
+            raise ValueError(f"{label} must be a single file or directory name.")
+        return value
+
+    def _reject_copy_into_self(self, source: Path, target_parent: Path) -> None:
+        try:
+            target_parent.relative_to(source)
+        except ValueError:
+            return
+        raise ValueError(f"Cannot copy a directory into itself: {source}")
 
     def _entry_from_path(self, path: Path) -> FileEntry:
         stat = path.stat()
