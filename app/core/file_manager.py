@@ -11,6 +11,7 @@ from app.common.models import (
     FileTransferRecord,
     TransferDirection,
 )
+from app.backends.sftp_backend import SftpBackend, SftpOperationResult
 from app.storage.repositories import FileTransferRepository
 
 
@@ -102,6 +103,28 @@ class FileManager:
         else:
             shutil.copy2(source, target)
         return self._entry_from_path(target)
+
+    async def list_remote_directory(self, backend: SftpBackend, path: str) -> list[FileEntry]:
+        """通过 SFTP 后端列出远程目录."""
+        return await backend.list_directory(path)
+
+    async def create_remote_directory(self, backend: SftpBackend, parent_path: str, name: str) -> SftpOperationResult:
+        """创建远程目录, 具体 IO 由 SFTP 后端执行."""
+        return await backend.create_directory(parent_path, name)
+
+    async def rename_remote_path(self, backend: SftpBackend, path: str, new_name: str) -> SftpOperationResult:
+        """重命名远程文件或目录, 不允许跨目录移动."""
+        return await backend.rename_path(path, new_name)
+
+    async def delete_remote_path(
+        self,
+        backend: SftpBackend,
+        path: str,
+        *,
+        is_directory: bool = False,
+    ) -> SftpOperationResult:
+        """删除远程文件或空目录, UI 必须先完成用户确认."""
+        return await backend.delete_path(path, is_directory=is_directory)
 
     def create_transfer_record(
         self,

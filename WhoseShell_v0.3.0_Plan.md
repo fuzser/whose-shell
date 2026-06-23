@@ -310,7 +310,7 @@ Acceptance gate:
 - Invalid local paths and failed file operations show clear messages.
 - Existing terminal input, selection, copy, History, and Settings behavior are not regressed.
 
-### Phase 3: SFTP Backend and Remote File Panel [todo]
+### Phase 3: SFTP Backend and Remote File Panel [done]
 
 Goal:
 

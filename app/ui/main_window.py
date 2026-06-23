@@ -50,6 +50,7 @@ class MainWindow(QMainWindow):
         self._history_panel: HistoryDock | None = None
         self._settings_dock_widget: QDockWidget | None = None
         self._settings_panel: SettingsPanel | None = None
+        self._files_panel: FileManagerDock | None = None
         self._closing_views: dict[int, TerminalView] = {}
         self._is_closing = False
 
@@ -107,8 +108,9 @@ class MainWindow(QMainWindow):
         history.rerun_requested.connect(self._rerun_history_command)
         self._history_panel = history
         self._history_dock_widget = self._dock("History", history)
-        files = FileManagerDock(self)
+        files = FileManagerDock(self, session_manager=self._context.session_manager)
         files.status_message.connect(self.statusBar().showMessage)
+        self._files_panel = files
         monitor = MonitorDock(self)
         settings = SettingsPanel(self._context.session_manager, self)
         settings.settings_saved.connect(self._handle_settings_saved)
@@ -148,6 +150,7 @@ class MainWindow(QMainWindow):
         managed_session = self._context.terminal_manager.create_ssh_terminal(config)
         self._add_terminal_tab(managed_session, managed_session.session.title)
         self._refresh_sessions_panel()
+        self._refresh_files_panel()
 
     def _open_connection(self, connection_id: int) -> None:
         managed_session = self._context.terminal_manager.create_terminal_from_connection(connection_id)
@@ -164,6 +167,7 @@ class MainWindow(QMainWindow):
         self._context.terminal_manager.refresh_ssh_connection_config(connection_id)
         self._rename_tabs_for_connection(connection_id, updated.name)
         self._refresh_sessions_panel()
+        self._refresh_files_panel()
         self._focus_current_terminal_later(force=True)
 
     def _delete_connection(self, connection_id: int) -> None:
@@ -180,6 +184,7 @@ class MainWindow(QMainWindow):
         self._close_tabs_for_connection(connection_id)
         self._context.session_manager.delete_ssh_connection(connection_id)
         self._refresh_sessions_panel()
+        self._refresh_files_panel()
 
     def _add_terminal_tab(
         self,
@@ -287,6 +292,12 @@ class MainWindow(QMainWindow):
             return
         if self._history_panel is not None:
             self._history_panel.refresh()
+
+    def _refresh_files_panel(self) -> None:
+        if self._is_closing:
+            return
+        if self._files_panel is not None:
+            self._files_panel.refresh_remote_connections()
 
     def _record_submitted_command(self, session_id: int, command_text: str) -> None:
         command = self._context.session_manager.record_command(session_id, command_text)

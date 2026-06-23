@@ -2,27 +2,88 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileSystemModel,
-    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
     QMessageBox,
-    QSizePolicy,
     QSplitter,
     QStyle,
+    QTableView,
     QToolButton,
     QTreeView,
     QVBoxLayout,
     QWidget,
 )
 
+from app.backends.sftp_backend import SftpDirectoryListWorker, SftpOperationWorker
+from app.common.models import FileEntry, FileEntryType
 from app.core.file_manager import FileManager
+from app.core.session_manager import SessionManager
+
+
+class RemoteFileTableModel(QAbstractTableModel):
+    """远程文件列表表格模型."""
+
+    _HEADERS = ("Name", "Size", "Type", "Modified", "Permissions")
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._entries: list[FileEntry] = []
+
+    def rowCount(self, parent=QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._entries)
+
+    def columnCount(self, parent=QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._HEADERS)
+
+    def data(self, index: QModelIndex, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        entry = self._entries[index.row()]
+        if role == Qt.DisplayRole:
+            return self._display_value(entry, index.column())
+        if role == Qt.TextAlignmentRole and index.column() == 1:
+            return Qt.AlignRight | Qt.AlignVCenter
+        return None
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role=Qt.DisplayRole):
+        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+            return self._HEADERS[section]
+        return super().headerData(section, orientation, role)
+
+    def set_entries(self, entries: list[FileEntry]) -> None:
+        self.beginResetModel()
+        self._entries = list(entries)
+        self.endResetModel()
+
+    def entry_at(self, row: int) -> FileEntry | None:
+        if row < 0 or row >= len(self._entries):
+            return None
+        return self._entries[row]
+
+    def _display_value(self, entry: FileEntry, column: int) -> str:
+        if column == 0:
+            return entry.name
+        if column == 1:
+            return "" if entry.size is None else str(entry.size)
+        if column == 2:
+            return entry.entry_type.value
+        if column == 3:
+            return entry.modified_at or ""
+        if column == 4:
+            return entry.permissions or ""
+        return ""
 
 
 class FileManagerDock(QWidget):
@@ -30,11 +91,21 @@ class FileManagerDock(QWidget):
 
     status_message = Signal(str)
 
-    def __init__(self, parent=None, file_manager: FileManager | None = None) -> None:
+    def __init__(
+        self,
+        parent=None,
+        file_manager: FileManager | None = None,
+        session_manager: SessionManager | None = None,
+    ) -> None:
         super().__init__(parent)
         self._file_manager = file_manager or FileManager()
+        self._session_manager = session_manager
         self._local_history: list[str] = []
         self._local_clipboard: Path | None = None
+        self._remote_config = None
+        self._remote_worker: SftpDirectoryListWorker | None = None
+        self._remote_operation_worker: SftpOperationWorker | None = None
+        self._remote_pending_path = "."
 
         self._local_model = QFileSystemModel(self)
         self._local_model.setReadOnly(True)
@@ -54,15 +125,47 @@ class FileManagerDock(QWidget):
         self._local_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self._local_view.customContextMenuRequested.connect(self._show_local_context_menu)
 
+        self._remote_connections = QComboBox(self)
+        self._remote_connections.currentIndexChanged.connect(self._remote_connection_changed)
+        self._remote_path = QLineEdit(".", self)
+        self._remote_path.returnPressed.connect(self._jump_to_remote_path)
+        self._remote_status = QLabel("Select a saved SSH connection to browse remote files.", self)
+        self._remote_status.setWordWrap(True)
+        self._remote_status.setTextInteractionFlags(Qt.NoTextInteraction)
+        self._remote_model = RemoteFileTableModel(self)
+        self._remote_view = QTableView(self)
+        self._remote_view.setModel(self._remote_model)
+        self._remote_view.setSelectionBehavior(QTableView.SelectRows)
+        self._remote_view.setSelectionMode(QTableView.SingleSelection)
+        self._remote_view.setEditTriggers(QTableView.NoEditTriggers)
+        self._remote_view.setAlternatingRowColors(True)
+        self._remote_view.doubleClicked.connect(self._open_remote_index)
+        self._remote_view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._remote_view.customContextMenuRequested.connect(self._show_remote_context_menu)
+
         layout = QHBoxLayout(self)
         splitter = QSplitter(Qt.Horizontal, self)
         splitter.addWidget(self._build_local_panel())
-        splitter.addWidget(self._build_remote_placeholder())
+        splitter.addWidget(self._build_remote_panel())
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
         layout.addWidget(splitter)
 
         self._set_local_root(root_path)
+        self.refresh_remote_connections()
+
+    def refresh_remote_connections(self) -> None:
+        self._remote_connections.blockSignals(True)
+        self._remote_connections.clear()
+        self._remote_connections.addItem("Select SSH connection...", None)
+        if self._session_manager is not None:
+            for connection in self._session_manager.list_ssh_connections():
+                self._remote_connections.addItem(connection.name, connection.id)
+        self._remote_connections.blockSignals(False)
+        has_connections = self._remote_connections.count() > 1
+        self._remote_connections.setEnabled(has_connections)
+        if not has_connections:
+            self._set_remote_status("No saved SSH connections. Create one from Sessions or New SSH Shell first.")
 
     def _build_local_panel(self) -> QWidget:
         panel = QWidget(self)
@@ -81,21 +184,26 @@ class FileManagerDock(QWidget):
         layout.addWidget(self._local_view, 1)
         return panel
 
-    def _build_remote_placeholder(self) -> QWidget:
-        panel = QFrame(self)
-        panel.setFrameShape(QFrame.StyledPanel)
-        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+    def _build_remote_panel(self) -> QWidget:
+        panel = QWidget(self)
         layout = QVBoxLayout(panel)
 
-        title = QLabel("Remote", panel)
-        title.setTextInteractionFlags(Qt.NoTextInteraction)
-        message = QLabel("SFTP browsing starts in Phase 3. No remote connection is selected.", panel)
-        message.setAlignment(Qt.AlignCenter)
-        message.setWordWrap(True)
-        message.setTextInteractionFlags(Qt.NoTextInteraction)
+        connection_row = QHBoxLayout()
+        label = QLabel("Remote", panel)
+        label.setTextInteractionFlags(Qt.NoTextInteraction)
+        connection_row.addWidget(label)
+        connection_row.addWidget(self._remote_connections, 1)
+        connection_row.addWidget(self._tool_button(QStyle.SP_DialogOpenButton, "Open SFTP browser", self._open_remote_connection))
 
-        layout.addWidget(title)
-        layout.addWidget(message, 1)
+        path_row = QHBoxLayout()
+        path_row.addWidget(self._remote_path, 1)
+        path_row.addWidget(self._tool_button(QStyle.SP_BrowserReload, "Refresh remote files", self._refresh_remote))
+        path_row.addWidget(self._tool_button(QStyle.SP_FileDialogToParent, "Go to remote parent folder", self._go_to_parent_remote))
+
+        layout.addLayout(connection_row)
+        layout.addLayout(path_row)
+        layout.addWidget(self._remote_status)
+        layout.addWidget(self._remote_view, 1)
         return panel
 
     def _tool_button(self, icon: QStyle.StandardPixmap, tooltip: str, handler) -> QToolButton:
@@ -305,14 +413,6 @@ class FileManagerDock(QWidget):
             return None
         return Path(self._local_model.filePath(index))
 
-    def _selected_local_directory(self) -> Path | None:
-        selected_path = self._selected_local_path()
-        if selected_path is None:
-            return None
-        if selected_path.is_dir():
-            return selected_path
-        return selected_path.parent
-
     def _context_target_directory(self, selected_path: Path | None) -> Path | None:
         if selected_path is not None and selected_path.is_dir():
             return selected_path
@@ -323,6 +423,183 @@ class FileManagerDock(QWidget):
         if root_index.isValid():
             return self._local_model.filePath(root_index)
         return str(Path.home())
+
+    def _remote_connection_changed(self) -> None:
+        self._remote_config = None
+        self._remote_model.set_entries([])
+        self._remote_path.setText(".")
+        self._set_remote_status("Open the selected SSH connection to browse remote files.")
+
+    def _open_remote_connection(self) -> None:
+        connection_id = self._selected_connection_id()
+        if connection_id is None or self._session_manager is None:
+            self._set_remote_status("Select a saved SSH connection first.")
+            return
+        try:
+            self._remote_config = self._session_manager.ssh_config_from_connection(connection_id)
+        except Exception as exc:
+            self._show_error("Open SFTP failed", exc)
+            return
+        start_path = self._remote_config.default_directory or "."
+        self._start_remote_listing(start_path)
+
+    def _jump_to_remote_path(self) -> None:
+        self._start_remote_listing(self._remote_path.text())
+
+    def _refresh_remote(self) -> None:
+        self._start_remote_listing(self._remote_path.text())
+
+    def _go_to_parent_remote(self) -> None:
+        current = self._remote_path.text().strip() or "."
+        parent = self._remote_parent_path(current)
+        if parent == current:
+            self._set_remote_status("Already at the remote filesystem root.")
+            return
+        self._start_remote_listing(parent)
+
+    def _open_remote_index(self, index: QModelIndex) -> None:
+        entry = self._remote_model.entry_at(index.row())
+        if entry is not None and entry.entry_type == FileEntryType.DIRECTORY:
+            self._start_remote_listing(entry.path)
+
+    def _show_remote_context_menu(self, position) -> None:
+        entry = self._selected_remote_entry()
+        menu = QMenu(self)
+        new_folder_action = menu.addAction("New Folder")
+        rename_action = menu.addAction("Rename")
+        delete_action = menu.addAction("Delete")
+
+        has_remote = self._remote_config is not None
+        has_selection = entry is not None
+        new_folder_action.setEnabled(has_remote)
+        rename_action.setEnabled(has_remote and has_selection)
+        delete_action.setEnabled(has_remote and has_selection)
+
+        selected = menu.exec(self._remote_view.viewport().mapToGlobal(position))
+        if selected == new_folder_action:
+            self._new_remote_folder()
+        elif selected == rename_action and entry is not None:
+            self._rename_remote(entry)
+        elif selected == delete_action and entry is not None:
+            self._delete_remote(entry)
+
+    def _new_remote_folder(self) -> None:
+        name, accepted = QInputDialog.getText(self, "New Remote Folder", "Folder name:")
+        if not accepted:
+            return
+        self._start_remote_operation("mkdir", self._remote_path.text(), name=name)
+
+    def _rename_remote(self, entry: FileEntry) -> None:
+        name, accepted = QInputDialog.getText(self, "Rename Remote Item", "New name:", text=entry.name)
+        if not accepted:
+            return
+        self._start_remote_operation("rename", entry.path, name=name)
+
+    def _delete_remote(self, entry: FileEntry) -> None:
+        kind = "folder" if entry.entry_type == FileEntryType.DIRECTORY else "file"
+        result = QMessageBox.question(
+            self,
+            "Delete Remote Item",
+            f"Delete this remote {kind}?\n{entry.path}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if result != QMessageBox.Yes:
+            return
+        self._start_remote_operation(
+            "delete",
+            entry.path,
+            is_directory=entry.entry_type == FileEntryType.DIRECTORY,
+        )
+
+    def _start_remote_listing(self, path: str) -> None:
+        if self._remote_config is None:
+            self._set_remote_status("Open a saved SSH connection before browsing remote files.")
+            return
+        if self._remote_worker is not None:
+            self._set_remote_status("Remote file operation is already running.")
+            return
+        self._remote_pending_path = path.strip() or "."
+        self._set_remote_status(f"Loading remote path: {self._remote_pending_path}")
+        worker = SftpDirectoryListWorker(self._remote_config, self._remote_pending_path, self)
+        self._remote_worker = worker
+        worker.loaded.connect(self._remote_listing_loaded)
+        worker.failed.connect(self._remote_listing_failed)
+        worker.finished.connect(lambda: self._clear_remote_worker(worker))
+        worker.start()
+
+    def _remote_listing_loaded(self, entries: list[FileEntry]) -> None:
+        self._remote_model.set_entries(entries)
+        self._remote_path.setText(self._remote_pending_path)
+        self._remote_view.resizeColumnsToContents()
+        self._set_remote_status(f"Remote path loaded: {self._remote_pending_path}")
+
+    def _remote_listing_failed(self, message: str) -> None:
+        self._remote_model.set_entries([])
+        self._set_remote_status(message)
+        QMessageBox.warning(self, "SFTP failed", message)
+
+    def _clear_remote_worker(self, worker: SftpDirectoryListWorker) -> None:
+        if self._remote_worker is worker:
+            self._remote_worker = None
+        worker.deleteLater()
+
+    def _start_remote_operation(
+        self,
+        operation: str,
+        path: str,
+        *,
+        name: str | None = None,
+        is_directory: bool = False,
+    ) -> None:
+        if self._remote_config is None:
+            self._set_remote_status("Open a saved SSH connection before changing remote files.")
+            return
+        if self._remote_operation_worker is not None:
+            self._set_remote_status("Remote file operation is already running.")
+            return
+        worker = SftpOperationWorker(self._remote_config, operation, path, name, is_directory, self)
+        self._remote_operation_worker = worker
+        worker.completed.connect(self._remote_operation_completed)
+        worker.failed.connect(self._remote_operation_failed)
+        worker.finished.connect(lambda: self._clear_remote_operation_worker(worker))
+        worker.start()
+
+    def _remote_operation_completed(self, result) -> None:
+        self._show_status(result.message)
+        self._refresh_remote()
+
+    def _remote_operation_failed(self, message: str) -> None:
+        self._set_remote_status(message)
+        QMessageBox.warning(self, "SFTP operation failed", message)
+
+    def _clear_remote_operation_worker(self, worker: SftpOperationWorker) -> None:
+        if self._remote_operation_worker is worker:
+            self._remote_operation_worker = None
+        worker.deleteLater()
+
+    def _selected_connection_id(self) -> int | None:
+        value = self._remote_connections.currentData()
+        if value is None:
+            return None
+        return int(value)
+
+    def _selected_remote_entry(self) -> FileEntry | None:
+        indexes = self._remote_view.selectionModel().selectedRows()
+        if not indexes:
+            return None
+        return self._remote_model.entry_at(indexes[0].row())
+
+    def _remote_parent_path(self, path: str) -> str:
+        normalized = path.strip().replace("\\", "/").rstrip("/")
+        if not normalized or normalized == "/":
+            return "/"
+        parent = normalized.rsplit("/", 1)[0]
+        return parent or "/"
+
+    def _set_remote_status(self, message: str) -> None:
+        self._remote_status.setText(message)
+        self._show_status(message)
 
     def _show_status(self, message: str) -> None:
         self.status_message.emit(message)

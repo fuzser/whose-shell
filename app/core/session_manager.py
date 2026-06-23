@@ -112,6 +112,14 @@ class SessionManager(QObject):
     def list_connections(self) -> list[ConnectionRecord]:
         return self._connections.list_connections()
 
+    def list_ssh_connections(self) -> list[ConnectionRecord]:
+        """列出已保存 SSH 连接, 供终端和 SFTP 面板复用."""
+        return [
+            connection
+            for connection in self._connections.list_connections()
+            if connection.connection_type == ConnectionType.SSH
+        ]
+
     def list_recent_sessions(self, limit: int = 50) -> list[SessionRecord]:
         return self._sessions.list_recent_sessions(limit)
 
