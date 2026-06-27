@@ -347,7 +347,7 @@ Acceptance gate:
 - Bad host, bad auth, missing path, permission failure, and network failure produce clear visible messages.
 - A failed SFTP operation does not corrupt active SSH terminal tabs.
 
-### Phase 4: Upload, Download, Conflict Handling, and Transfer Queue [todo]
+### Phase 4: Upload, Download, Conflict Handling, and Transfer Queue [done]
 
 Goal:
 

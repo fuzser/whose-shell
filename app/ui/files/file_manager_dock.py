@@ -22,8 +22,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.backends.sftp_backend import SftpDirectoryListWorker, SftpOperationWorker
-from app.common.models import FileEntry, FileEntryType
+from app.backends.sftp_backend import SftpDirectoryListWorker, SftpOperationWorker, SftpTransferWorker
+from app.common.models import (
+    ConflictPolicy,
+    FileEntry,
+    FileEntryType,
+    FileTransferRecord,
+    TransferDirection,
+    TransferStatus,
+)
 from app.core.file_manager import FileManager
 from app.core.session_manager import SessionManager
 
@@ -86,6 +93,78 @@ class RemoteFileTableModel(QAbstractTableModel):
         return ""
 
 
+class TransferTableModel(QAbstractTableModel):
+    """传输队列表格模型."""
+
+    _HEADERS = ("Direction", "Status", "Progress", "Source", "Target", "Policy", "Error")
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._records: list[FileTransferRecord] = []
+
+    def rowCount(self, parent=QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._records)
+
+    def columnCount(self, parent=QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._HEADERS)
+
+    def data(self, index: QModelIndex, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        record = self._records[index.row()]
+        if role == Qt.DisplayRole:
+            return self._display_value(record, index.column())
+        return None
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role=Qt.DisplayRole):
+        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+            return self._HEADERS[section]
+        return super().headerData(section, orientation, role)
+
+    def set_records(self, records: list[FileTransferRecord]) -> None:
+        self.beginResetModel()
+        self._records = list(records)
+        self.endResetModel()
+
+    def upsert_record(self, record: FileTransferRecord) -> None:
+        for index, current in enumerate(self._records):
+            if current.id == record.id:
+                self._records[index] = record
+                model_index = self.index(index, 0)
+                self.dataChanged.emit(model_index, self.index(index, self.columnCount() - 1))
+                return
+        self.beginInsertRows(QModelIndex(), 0, 0)
+        self._records.insert(0, record)
+        self.endInsertRows()
+
+    def _display_value(self, record: FileTransferRecord, column: int) -> str:
+        if column == 0:
+            return record.direction.value
+        if column == 1:
+            return record.status.value
+        if column == 2:
+            return self._progress_text(record)
+        if column == 3:
+            return record.source_path
+        if column == 4:
+            return record.target_path
+        if column == 5:
+            return record.conflict_policy.value
+        if column == 6:
+            return record.error_message or ""
+        return ""
+
+    def _progress_text(self, record: FileTransferRecord) -> str:
+        if record.total_bytes in {None, 0}:
+            return str(record.bytes_transferred)
+        percent = min(100, int(record.bytes_transferred * 100 / record.total_bytes))
+        return f"{percent}% ({record.bytes_transferred}/{record.total_bytes})"
+
+
 class FileManagerDock(QWidget):
     """本地和远程文件管理器 Dock."""
 
@@ -103,8 +182,10 @@ class FileManagerDock(QWidget):
         self._local_history: list[str] = []
         self._local_clipboard: Path | None = None
         self._remote_config = None
+        self._remote_connection_id: int | None = None
         self._remote_worker: SftpDirectoryListWorker | None = None
         self._remote_operation_worker: SftpOperationWorker | None = None
+        self._transfer_workers: dict[int, SftpTransferWorker] = {}
         self._remote_pending_path = "."
 
         self._local_model = QFileSystemModel(self)
@@ -142,17 +223,25 @@ class FileManagerDock(QWidget):
         self._remote_view.doubleClicked.connect(self._open_remote_index)
         self._remote_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self._remote_view.customContextMenuRequested.connect(self._show_remote_context_menu)
+        self._transfer_model = TransferTableModel(self)
+        self._transfer_view = QTableView(self)
+        self._transfer_view.setModel(self._transfer_model)
+        self._transfer_view.setSelectionBehavior(QTableView.SelectRows)
+        self._transfer_view.setEditTriggers(QTableView.NoEditTriggers)
+        self._transfer_view.setAlternatingRowColors(True)
 
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         splitter = QSplitter(Qt.Horizontal, self)
         splitter.addWidget(self._build_local_panel())
         splitter.addWidget(self._build_remote_panel())
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
-        layout.addWidget(splitter)
+        layout.addWidget(splitter, 3)
+        layout.addWidget(self._build_transfer_panel(), 1)
 
         self._set_local_root(root_path)
         self.refresh_remote_connections()
+        self._refresh_transfer_records()
 
     def refresh_remote_connections(self) -> None:
         self._remote_connections.blockSignals(True)
@@ -206,6 +295,19 @@ class FileManagerDock(QWidget):
         layout.addWidget(self._remote_view, 1)
         return panel
 
+    def _build_transfer_panel(self) -> QWidget:
+        panel = QWidget(self)
+        layout = QVBoxLayout(panel)
+        header = QHBoxLayout()
+        label = QLabel("Transfers", panel)
+        label.setTextInteractionFlags(Qt.NoTextInteraction)
+        header.addWidget(label)
+        header.addStretch(1)
+        header.addWidget(self._tool_button(QStyle.SP_BrowserReload, "Refresh transfer queue", self._refresh_transfer_records))
+        layout.addLayout(header)
+        layout.addWidget(self._transfer_view, 1)
+        return panel
+
     def _tool_button(self, icon: QStyle.StandardPixmap, tooltip: str, handler) -> QToolButton:
         button = QToolButton(self)
         button.setIcon(self.style().standardIcon(icon))
@@ -253,12 +355,14 @@ class FileManagerDock(QWidget):
         menu.addSeparator()
         copy_action = menu.addAction("Copy")
         paste_action = menu.addAction("Paste")
+        upload_action = menu.addAction("Upload")
 
         has_selection = selected_path is not None
         rename_action.setEnabled(has_selection)
         delete_action.setEnabled(has_selection)
         copy_action.setEnabled(has_selection)
         paste_action.setEnabled(self._local_clipboard is not None and target_directory is not None)
+        upload_action.setEnabled(has_selection and selected_path is not None and selected_path.is_file() and self._remote_config is not None)
 
         selected = menu.exec(self._local_view.viewport().mapToGlobal(position))
         self._handle_local_context_action(
@@ -269,6 +373,7 @@ class FileManagerDock(QWidget):
             delete_action,
             copy_action,
             paste_action,
+            upload_action,
             selected_path,
             target_directory,
         )
@@ -282,6 +387,7 @@ class FileManagerDock(QWidget):
         delete_action: QAction,
         copy_action: QAction,
         paste_action: QAction,
+        upload_action: QAction,
         selected_path: Path | None,
         target_directory: Path | None,
     ) -> None:
@@ -297,6 +403,8 @@ class FileManagerDock(QWidget):
             self._copy_local(selected_path)
         elif selected == paste_action and target_directory is not None:
             self._paste_local(target_directory)
+        elif selected == upload_action and selected_path is not None:
+            self._upload_local_file(selected_path)
 
     def _new_local_folder(self, parent_path: Path | None = None) -> None:
         parent_path = parent_path or Path(self._current_local_root())
@@ -426,6 +534,7 @@ class FileManagerDock(QWidget):
 
     def _remote_connection_changed(self) -> None:
         self._remote_config = None
+        self._remote_connection_id = None
         self._remote_model.set_entries([])
         self._remote_path.setText(".")
         self._set_remote_status("Open the selected SSH connection to browse remote files.")
@@ -437,6 +546,7 @@ class FileManagerDock(QWidget):
             return
         try:
             self._remote_config = self._session_manager.ssh_config_from_connection(connection_id)
+            self._remote_connection_id = connection_id
         except Exception as exc:
             self._show_error("Open SFTP failed", exc)
             return
@@ -468,12 +578,16 @@ class FileManagerDock(QWidget):
         new_folder_action = menu.addAction("New Folder")
         rename_action = menu.addAction("Rename")
         delete_action = menu.addAction("Delete")
+        download_action = menu.addAction("Download")
 
         has_remote = self._remote_config is not None
         has_selection = entry is not None
         new_folder_action.setEnabled(has_remote)
         rename_action.setEnabled(has_remote and has_selection)
         delete_action.setEnabled(has_remote and has_selection)
+        download_action.setEnabled(
+            has_remote and entry is not None and entry.entry_type == FileEntryType.FILE
+        )
 
         selected = menu.exec(self._remote_view.viewport().mapToGlobal(position))
         if selected == new_folder_action:
@@ -482,6 +596,8 @@ class FileManagerDock(QWidget):
             self._rename_remote(entry)
         elif selected == delete_action and entry is not None:
             self._delete_remote(entry)
+        elif selected == download_action and entry is not None:
+            self._download_remote_file(entry)
 
     def _new_remote_folder(self) -> None:
         name, accepted = QInputDialog.getText(self, "New Remote Folder", "Folder name:")
@@ -578,6 +694,145 @@ class FileManagerDock(QWidget):
             self._remote_operation_worker = None
         worker.deleteLater()
 
+    def _upload_local_file(self, selected_path: Path) -> None:
+        if self._remote_config is None:
+            self._set_remote_status("Open a saved SSH connection before uploading.")
+            return
+        policy = self._choose_conflict_policy()
+        if policy is None:
+            return
+        remote_directory = self._remote_path.text().strip() or "."
+        target_path = self._remote_join(remote_directory, selected_path.name)
+        try:
+            transfer = self._file_manager.create_transfer_record(
+                TransferDirection.UPLOAD,
+                selected_path,
+                target_path,
+                conflict_policy=policy,
+                connection_id=self._remote_connection_id,
+                host=self._remote_config.host,
+                total_bytes=selected_path.stat().st_size,
+            )
+        except Exception as exc:
+            self._show_error("Upload failed", exc)
+            return
+        self._start_transfer_worker(transfer, str(selected_path), remote_directory)
+
+    def _download_remote_file(self, entry: FileEntry) -> None:
+        if self._remote_config is None:
+            self._set_remote_status("Open a saved SSH connection before downloading.")
+            return
+        if entry.entry_type != FileEntryType.FILE:
+            self._set_remote_status("Only single-file downloads are supported in this phase.")
+            return
+        policy = self._choose_conflict_policy()
+        if policy is None:
+            return
+        local_directory = self._current_local_root()
+        target_path = str(Path(local_directory) / entry.name)
+        try:
+            transfer = self._file_manager.create_transfer_record(
+                TransferDirection.DOWNLOAD,
+                entry.path,
+                target_path,
+                conflict_policy=policy,
+                connection_id=self._remote_connection_id,
+                host=self._remote_config.host,
+                total_bytes=entry.size,
+            )
+        except Exception as exc:
+            self._show_error("Download failed", exc)
+            return
+        self._start_transfer_worker(transfer, entry.path, local_directory)
+
+    def _start_transfer_worker(
+        self,
+        transfer: FileTransferRecord,
+        source_path: str,
+        target_directory: str,
+    ) -> None:
+        if self._remote_config is None:
+            return
+        try:
+            running = self._file_manager.mark_transfer_running(transfer.id)
+        except Exception as exc:
+            self._show_error("Transfer failed", exc)
+            return
+        self._transfer_model.upsert_record(running)
+        worker = SftpTransferWorker(
+            transfer.id,
+            self._remote_config,
+            transfer.direction.value,
+            source_path,
+            target_directory,
+            transfer.conflict_policy,
+            self,
+        )
+        self._transfer_workers[transfer.id] = worker
+        worker.progress.connect(self._transfer_progressed)
+        worker.completed.connect(self._transfer_completed)
+        worker.failed.connect(self._transfer_failed)
+        worker.finished.connect(lambda transfer_id=transfer.id: self._clear_transfer_worker(transfer_id))
+        worker.start()
+        self._show_status(f"Transfer started: #{transfer.id}")
+
+    def _transfer_progressed(self, transfer_id: int, bytes_transferred: int, total_bytes) -> None:
+        try:
+            record = self._file_manager.update_transfer_progress(transfer_id, bytes_transferred, total_bytes)
+        except Exception as exc:
+            self._show_error("Transfer progress failed", exc)
+            return
+        self._transfer_model.upsert_record(record)
+
+    def _transfer_completed(self, transfer_id: int, result) -> None:
+        try:
+            self._file_manager.update_transfer_target_path(transfer_id, result.path)
+            record = self._file_manager.complete_transfer(transfer_id, result.bytes_transferred)
+        except Exception as exc:
+            self._show_error("Transfer completion failed", exc)
+            return
+        self._transfer_model.upsert_record(record)
+        self._show_status(result.message or f"Transfer completed: #{transfer_id}")
+        self._refresh_local()
+        if self._remote_config is not None:
+            self._refresh_remote()
+
+    def _transfer_failed(self, transfer_id: int, message: str) -> None:
+        try:
+            record = self._file_manager.fail_transfer(transfer_id, message)
+        except Exception as exc:
+            self._show_error("Transfer failure update failed", exc)
+            return
+        self._transfer_model.upsert_record(record)
+        QMessageBox.warning(self, "Transfer failed", message)
+
+    def _clear_transfer_worker(self, transfer_id: int) -> None:
+        worker = self._transfer_workers.pop(transfer_id, None)
+        if worker is not None:
+            worker.deleteLater()
+
+    def _refresh_transfer_records(self) -> None:
+        self._transfer_model.set_records(self._file_manager.list_transfer_records())
+        self._transfer_view.resizeColumnsToContents()
+
+    def _choose_conflict_policy(self) -> ConflictPolicy | None:
+        labels = {
+            "Skip existing target": ConflictPolicy.SKIP,
+            "Overwrite existing target": ConflictPolicy.OVERWRITE,
+            "Rename as copy": ConflictPolicy.RENAME,
+        }
+        choice, accepted = QInputDialog.getItem(
+            self,
+            "Conflict Policy",
+            "If target exists:",
+            list(labels.keys()),
+            0,
+            False,
+        )
+        if not accepted:
+            return None
+        return labels[choice]
+
     def _selected_connection_id(self) -> int | None:
         value = self._remote_connections.currentData()
         if value is None:
@@ -596,6 +851,14 @@ class FileManagerDock(QWidget):
             return "/"
         parent = normalized.rsplit("/", 1)[0]
         return parent or "/"
+
+    def _remote_join(self, parent: str, name: str) -> str:
+        normalized_parent = parent.strip().replace("\\", "/").rstrip("/") or "."
+        if normalized_parent == "/":
+            return f"/{name}"
+        if normalized_parent == ".":
+            return name
+        return f"{normalized_parent}/{name}"
 
     def _set_remote_status(self, message: str) -> None:
         self._remote_status.setText(message)

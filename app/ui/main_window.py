@@ -108,7 +108,11 @@ class MainWindow(QMainWindow):
         history.rerun_requested.connect(self._rerun_history_command)
         self._history_panel = history
         self._history_dock_widget = self._dock("History", history)
-        files = FileManagerDock(self, session_manager=self._context.session_manager)
+        files = FileManagerDock(
+            self,
+            file_manager=self._context.file_manager,
+            session_manager=self._context.session_manager,
+        )
         files.status_message.connect(self.statusBar().showMessage)
         self._files_panel = files
         monitor = MonitorDock(self)

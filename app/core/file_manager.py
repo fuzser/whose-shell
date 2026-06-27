@@ -10,6 +10,7 @@ from app.common.models import (
     FileEntryType,
     FileTransferRecord,
     TransferDirection,
+    TransferStatus,
 )
 from app.backends.sftp_backend import SftpBackend, SftpOperationResult
 from app.storage.repositories import FileTransferRepository
@@ -104,6 +105,17 @@ class FileManager:
             shutil.copy2(source, target)
         return self._entry_from_path(target)
 
+    def list_transfer_records(
+        self,
+        limit: int = 100,
+        status: TransferStatus | None = None,
+        connection_id: int | None = None,
+    ) -> list[FileTransferRecord]:
+        """列出传输队列记录."""
+        if self._transfers is None:
+            return []
+        return self._transfers.list_transfers(limit=limit, status=status, connection_id=connection_id)
+
     async def list_remote_directory(self, backend: SftpBackend, path: str) -> list[FileEntry]:
         """通过 SFTP 后端列出远程目录."""
         return await backend.list_directory(path)
@@ -136,7 +148,7 @@ class FileManager:
         host: str | None = None,
         total_bytes: int | None = None,
     ) -> FileTransferRecord:
-        """创建传输记录, Phase 1 不执行真实 IO."""
+        """创建传输记录."""
         if self._transfers is None:
             raise RuntimeError("File transfer repository is not configured.")
         return self._transfers.create_transfer(
@@ -148,6 +160,45 @@ class FileManager:
             host=host,
             total_bytes=total_bytes,
         )
+
+    def mark_transfer_running(self, transfer_id: int) -> FileTransferRecord:
+        """标记传输开始运行."""
+        if self._transfers is None:
+            raise RuntimeError("File transfer repository is not configured.")
+        return self._transfers.mark_running(transfer_id)
+
+    def update_transfer_progress(
+        self,
+        transfer_id: int,
+        bytes_transferred: int,
+        total_bytes: int | None = None,
+    ) -> FileTransferRecord:
+        """更新传输进度."""
+        if self._transfers is None:
+            raise RuntimeError("File transfer repository is not configured.")
+        return self._transfers.update_progress(transfer_id, bytes_transferred, total_bytes)
+
+    def update_transfer_target_path(self, transfer_id: int, target_path: str) -> FileTransferRecord:
+        """更新传输最终目标路径."""
+        if self._transfers is None:
+            raise RuntimeError("File transfer repository is not configured.")
+        return self._transfers.update_target_path(transfer_id, target_path)
+
+    def complete_transfer(
+        self,
+        transfer_id: int,
+        bytes_transferred: int | None = None,
+    ) -> FileTransferRecord:
+        """标记传输完成."""
+        if self._transfers is None:
+            raise RuntimeError("File transfer repository is not configured.")
+        return self._transfers.complete_transfer(transfer_id, bytes_transferred)
+
+    def fail_transfer(self, transfer_id: int, error_message: str) -> FileTransferRecord:
+        """标记传输失败."""
+        if self._transfers is None:
+            raise RuntimeError("File transfer repository is not configured.")
+        return self._transfers.fail_transfer(transfer_id, error_message)
 
     def _normalize_path(self, path: str | Path) -> Path:
         try:

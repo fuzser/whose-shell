@@ -4,11 +4,12 @@ import asyncio
 import stat
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QThread, Signal
 
-from app.common.models import FileEntry, FileEntryType, SshConnectionConfig
+from app.common.models import ConflictPolicy, FileEntry, FileEntryType, SshConnectionConfig
 
 
 class SftpError(RuntimeError):
@@ -21,6 +22,16 @@ class SftpOperationResult:
 
     path: str
     message: str
+
+
+@dataclass(frozen=True)
+class SftpTransferResult:
+    """SFTP 单文件传输结果."""
+
+    path: str
+    bytes_transferred: int
+    skipped: bool = False
+    message: str = ""
 
 
 class SftpBackend:
@@ -76,6 +87,95 @@ class SftpBackend:
             await self._run_sftp_call(lambda sftp: sftp.remove(target))
         return SftpOperationResult(path=target, message=f"Deleted remote item: {target}")
 
+    async def upload_file(
+        self,
+        local_path: str | Path,
+        remote_directory: str,
+        conflict_policy: ConflictPolicy = ConflictPolicy.SKIP,
+        progress_callback=None,
+    ) -> SftpTransferResult:
+        """上传单个本地文件到远程目录."""
+        source = Path(local_path).expanduser().resolve(strict=True)
+        if not source.is_file():
+            raise ValueError(f"Upload source must be a file: {source}")
+        remote_target = self._join_remote_path(remote_directory, source.name)
+        asyncssh = self._load_asyncssh()
+        connection = None
+        try:
+            connection = await asyncssh.connect(**self._connect_kwargs())
+            sftp = await connection.start_sftp_client()
+            target = await self._resolve_remote_conflict(sftp, remote_target, conflict_policy)
+            if target is None:
+                return SftpTransferResult(
+                    path=remote_target,
+                    bytes_transferred=0,
+                    skipped=True,
+                    message=f"Skipped existing remote file: {remote_target}",
+                )
+            total_bytes = source.stat().st_size
+            transferred = await self._upload_bytes(sftp, source, target, total_bytes, progress_callback)
+            return SftpTransferResult(
+                path=target,
+                bytes_transferred=transferred,
+                message=f"Uploaded file: {target}",
+            )
+        except Exception as exc:
+            raise SftpError(self._format_error(exc, asyncssh)) from exc
+        finally:
+            if connection is not None:
+                connection.close()
+                await connection.wait_closed()
+
+    async def download_file(
+        self,
+        remote_path: str,
+        local_directory: str | Path,
+        conflict_policy: ConflictPolicy = ConflictPolicy.SKIP,
+        progress_callback=None,
+    ) -> SftpTransferResult:
+        """下载单个远程文件到本地目录."""
+        remote_source = self._normalize_remote_path(remote_path)
+        target_directory = Path(local_directory).expanduser().resolve(strict=True)
+        if not target_directory.is_dir():
+            raise NotADirectoryError(f"Download target must be a local directory: {target_directory}")
+        local_target = self._resolve_local_conflict(
+            target_directory / self._remote_basename(remote_source),
+            conflict_policy,
+        )
+        if local_target is None:
+            return SftpTransferResult(
+                path=str(target_directory / self._remote_basename(remote_source)),
+                bytes_transferred=0,
+                skipped=True,
+                message=f"Skipped existing local file: {target_directory / self._remote_basename(remote_source)}",
+            )
+
+        asyncssh = self._load_asyncssh()
+        connection = None
+        try:
+            connection = await asyncssh.connect(**self._connect_kwargs())
+            sftp = await connection.start_sftp_client()
+            attrs = await self._maybe_await(sftp.stat(remote_source))
+            total_bytes = getattr(attrs, "size", None)
+            transferred = await self._download_bytes(
+                sftp,
+                remote_source,
+                local_target,
+                total_bytes,
+                progress_callback,
+            )
+            return SftpTransferResult(
+                path=str(local_target),
+                bytes_transferred=transferred,
+                message=f"Downloaded file: {local_target}",
+            )
+        except Exception as exc:
+            raise SftpError(self._format_error(exc, asyncssh)) from exc
+        finally:
+            if connection is not None:
+                connection.close()
+                await connection.wait_closed()
+
     def _load_asyncssh(self):
         if self._asyncssh_module is not None:
             return self._asyncssh_module
@@ -100,6 +200,114 @@ class SftpBackend:
             if connection is not None:
                 connection.close()
                 await connection.wait_closed()
+
+    async def _upload_bytes(
+        self,
+        sftp,
+        source: Path,
+        target: str,
+        total_bytes: int,
+        progress_callback,
+    ) -> int:
+        transferred = 0
+        remote_file = await self._maybe_await(sftp.open(target, "wb"))
+        try:
+            with source.open("rb") as local_file:
+                while True:
+                    chunk = local_file.read(1024 * 256)
+                    if not chunk:
+                        break
+                    await self._maybe_await(remote_file.write(chunk))
+                    transferred += len(chunk)
+                    self._emit_progress(progress_callback, transferred, total_bytes)
+        finally:
+            await self._close_sftp_file(remote_file)
+        return transferred
+
+    async def _download_bytes(
+        self,
+        sftp,
+        source: str,
+        target: Path,
+        total_bytes: int | None,
+        progress_callback,
+    ) -> int:
+        transferred = 0
+        remote_file = await self._maybe_await(sftp.open(source, "rb"))
+        try:
+            with target.open("wb") as local_file:
+                while True:
+                    chunk = await self._maybe_await(remote_file.read(1024 * 256))
+                    if not chunk:
+                        break
+                    if isinstance(chunk, str):
+                        chunk = chunk.encode("utf-8")
+                    local_file.write(chunk)
+                    transferred += len(chunk)
+                    self._emit_progress(progress_callback, transferred, total_bytes)
+        finally:
+            await self._close_sftp_file(remote_file)
+        return transferred
+
+    async def _close_sftp_file(self, file_obj) -> None:
+        close = getattr(file_obj, "close", None)
+        if close is not None:
+            result = close()
+            if hasattr(result, "__await__"):
+                await result
+
+    def _emit_progress(self, progress_callback, transferred: int, total_bytes: int | None) -> None:
+        if progress_callback is not None:
+            progress_callback(transferred, total_bytes)
+
+    async def _resolve_remote_conflict(self, sftp, target: str, policy: ConflictPolicy) -> str | None:
+        if not await self._remote_exists(sftp, target):
+            return target
+        if policy == ConflictPolicy.SKIP:
+            return None
+        if policy == ConflictPolicy.OVERWRITE:
+            return target
+        if policy == ConflictPolicy.RENAME:
+            return await self._next_remote_copy_path(sftp, target)
+        raise ValueError(f"Unsupported conflict policy: {policy}")
+
+    async def _remote_exists(self, sftp, path: str) -> bool:
+        try:
+            await self._maybe_await(sftp.stat(path))
+            return True
+        except Exception:
+            return False
+
+    async def _next_remote_copy_path(self, sftp, target: str) -> str:
+        parent = self._parent_remote_path(target)
+        name = self._remote_basename(target)
+        stem, suffix = self._split_name_suffix(name)
+        for index in range(1, 1000):
+            candidate_name = f"{stem} copy{'' if index == 1 else f' {index}'}{suffix}"
+            candidate = self._join_remote_path(parent, candidate_name)
+            if not await self._remote_exists(sftp, candidate):
+                return candidate
+        raise FileExistsError(f"No available remote copy name for: {target}")
+
+    def _resolve_local_conflict(self, target: Path, policy: ConflictPolicy) -> Path | None:
+        if not target.exists():
+            return target
+        if policy == ConflictPolicy.SKIP:
+            return None
+        if policy == ConflictPolicy.OVERWRITE:
+            return target
+        if policy == ConflictPolicy.RENAME:
+            return self._next_local_copy_path(target)
+        raise ValueError(f"Unsupported conflict policy: {policy}")
+
+    def _next_local_copy_path(self, target: Path) -> Path:
+        for index in range(1, 1000):
+            candidate = target.with_name(
+                f"{target.stem} copy{'' if index == 1 else f' {index}'}{target.suffix}"
+            )
+            if not candidate.exists():
+                return candidate
+        raise FileExistsError(f"No available local copy name for: {target}")
 
     async def _scan_directory(self, sftp, path: str) -> list[FileEntry]:
         if hasattr(sftp, "scandir"):
@@ -211,6 +419,19 @@ class SftpBackend:
         parent = normalized.rsplit("/", 1)[0]
         return parent or "/"
 
+    def _remote_basename(self, path: str) -> str:
+        value = self._normalize_remote_path(path).rstrip("/")
+        name = value.rsplit("/", 1)[-1]
+        if not name:
+            raise ValueError(f"Remote path has no file name: {path}")
+        return name
+
+    def _split_name_suffix(self, name: str) -> tuple[str, str]:
+        if "." not in name or name.startswith(".") and name.count(".") == 1:
+            return name, ""
+        stem, suffix = name.rsplit(".", 1)
+        return stem, f".{suffix}"
+
     def _join_remote_path(self, parent: str, name: str) -> str:
         normalized_parent = self._normalize_remote_path(parent).rstrip("/")
         if not normalized_parent:
@@ -287,3 +508,60 @@ class SftpOperationWorker(QThread):
         if self._operation == "delete":
             return await backend.delete_path(self._path, is_directory=self._is_directory)
         raise ValueError(f"Unsupported SFTP operation: {self._operation}")
+
+
+class SftpTransferWorker(QThread):
+    """在后台线程中执行单文件上传或下载."""
+
+    progress = Signal(int, int, object)
+    completed = Signal(int, object)
+    failed = Signal(int, str)
+
+    def __init__(
+        self,
+        transfer_id: int,
+        config: SshConnectionConfig,
+        direction: str,
+        source_path: str,
+        target_directory: str,
+        conflict_policy: ConflictPolicy,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._transfer_id = transfer_id
+        self._config = config
+        self._direction = direction
+        self._source_path = source_path
+        self._target_directory = target_directory
+        self._conflict_policy = conflict_policy
+
+    def run(self) -> None:
+        try:
+            result = asyncio.run(self._run_transfer())
+        except Exception as exc:
+            self.failed.emit(self._transfer_id, str(exc))
+            return
+        self.completed.emit(self._transfer_id, result)
+
+    async def _run_transfer(self) -> SftpTransferResult:
+        backend = SftpBackend(self._config)
+        progress_callback = lambda transferred, total: self.progress.emit(
+            self._transfer_id,
+            transferred,
+            total,
+        )
+        if self._direction == "upload":
+            return await backend.upload_file(
+                self._source_path,
+                self._target_directory,
+                self._conflict_policy,
+                progress_callback,
+            )
+        if self._direction == "download":
+            return await backend.download_file(
+                self._source_path,
+                self._target_directory,
+                self._conflict_policy,
+                progress_callback,
+            )
+        raise ValueError(f"Unsupported transfer direction: {self._direction}")

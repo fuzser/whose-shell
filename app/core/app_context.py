@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.common.signals import EventBus
+from app.core.file_manager import FileManager
 from app.core.session_manager import SessionManager
 from app.core.terminal_manager import TerminalManager
 from app.storage.db import Database
@@ -10,6 +11,7 @@ from app.storage.repositories import (
     CommandRepository,
     ConnectionRepository,
     FavoriteRepository,
+    FileTransferRepository,
     SessionRepository,
     SettingsRepository,
 )
@@ -24,6 +26,7 @@ class AppContext:
     database: Database
     session_manager: SessionManager
     terminal_manager: TerminalManager
+    file_manager: FileManager
     settings_repository: SettingsRepository
 
     @classmethod
@@ -35,6 +38,7 @@ class AppContext:
         command_repository = CommandRepository(database.connection)
         favorite_repository = FavoriteRepository(database.connection)
         settings_repository = SettingsRepository(database.connection)
+        transfer_repository = FileTransferRepository(database.connection)
         secret_store = SecretStore()
         session_manager = SessionManager(
             event_bus,
@@ -46,10 +50,12 @@ class AppContext:
             secret_store,
         )
         terminal_manager = TerminalManager(session_manager)
+        file_manager = FileManager(transfer_repository)
         return cls(
             event_bus=event_bus,
             database=database,
             session_manager=session_manager,
             terminal_manager=terminal_manager,
+            file_manager=file_manager,
             settings_repository=settings_repository,
         )

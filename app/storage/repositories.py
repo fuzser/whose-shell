@@ -635,6 +635,22 @@ class FileTransferRepository:
         self._connection.commit()
         return self.get_transfer(transfer_id)
 
+    def update_target_path(self, transfer_id: int, target_path: str) -> FileTransferRecord:
+        """更新冲突重命名后的最终目标路径."""
+        normalized_target = target_path.strip()
+        if not normalized_target:
+            raise ValueError("Target path cannot be empty.")
+        self._connection.execute(
+            """
+            UPDATE file_transfers
+            SET target_path = ?
+            WHERE id = ?
+            """,
+            (normalized_target, transfer_id),
+        )
+        self._connection.commit()
+        return self.get_transfer(transfer_id)
+
     def complete_transfer(
         self,
         transfer_id: int,
